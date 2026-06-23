@@ -1,0 +1,22 @@
+# tone_detector.spk
+#
+# A bank of Resonator neurons for frequency-selective detection -- e.g.
+# distinguishing a specific sound signature from background noise and
+# other sounds, instead of a naive "is it loud" amplitude threshold.
+#
+# Validated approach: resonator-prototype/accuracy_benchmark.py measured
+# 99.2% detection accuracy / 100% recall for this method vs ~65% accuracy
+# / ~45% recall for a raw-amplitude threshold, across multiple noise
+# levels. This file wires the same model into the real DSL.
+
+neuron Target110 type=Resonator freq=110 damping=0.02
+neuron Target220 type=Resonator freq=220 damping=0.02
+neuron Target440 type=Resonator freq=440 damping=0.02
+neuron Target880 type=Resonator freq=880 damping=0.02
+neuron Target1760 type=Resonator freq=1760 damping=0.02
+
+action Target110 -> [TONE_110HZ]
+action Target220 -> [TONE_220HZ]
+action Target440 -> [TONE_440HZ]
+action Target880 -> [TONE_880HZ]
+action Target1760 -> [TONE_1760HZ]

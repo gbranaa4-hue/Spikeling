@@ -1,0 +1,4 @@
+# Spikeling Neural Configuration
+neuron LeftMic threshold=110 leak=5
+neuron RightMic threshold=110 leak=5
+refractory=400ms

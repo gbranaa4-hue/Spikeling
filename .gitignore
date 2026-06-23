@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Compiled binaries / build artifacts (don't belong in source control)
+*.exe
+*.o
+*.obj
+*.pyz
+*.pkg
+*.spec
+build-artifacts/
+**/build/
+**/build-cache/
+spikeling_sim
+
+# Databases (and a reminder: check these for secrets/API keys before sharing)
+*.db
+
+# --- EXCLUDED: separate project folders kept out of this repo ---
+acoustic-levitation-sim/
+AcousticVortexTrap_Package/
+AcousticVortexTrap_Package.zip
+AcousticVortexTrap_Package_RENAME-to-zip.bin
+
+# OS
+.DS_Store
+Thumbs.db

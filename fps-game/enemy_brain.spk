@@ -1,0 +1,24 @@
+# Spikeling Neural Configuration
+# Enemy AI brain - drop-in replacement for any NeuralEnemy
+# All neurons, weights, and actions are hot-swappable at load time
+
+neuron SightThreat    threshold=60  leak=8
+neuron ProximityAlert threshold=80  leak=5
+neuron DamageTaken    threshold=40  leak=15
+neuron LowHealth      threshold=90  leak=2
+neuron PatrolIdle     threshold=30  leak=20
+
+action SightThreat    -> [CHASE]
+action ProximityAlert -> [ATTACK]
+action DamageTaken    -> [RECOIL]
+action LowHealth      -> [FLEE]
+action PatrolIdle     -> [PATROL]
+
+refractory=300ms
+
+weight SightThreat    stimulus=SIGHT    value=100
+weight SightThreat    stimulus=SOUND    value=40
+weight ProximityAlert stimulus=DISTANCE value=100
+weight DamageTaken    stimulus=HIT      value=100
+weight LowHealth      stimulus=HEALTH   value=100
+weight PatrolIdle     stimulus=IDLE     value=100

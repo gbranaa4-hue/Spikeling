@@ -1,0 +1,78 @@
+# Spikeling Neural Configuration
+# Signal Event Detector
+# ----------------------
+# 16 input channels (matching SignalEncoder's default rate-coding width).
+# SignalEncoder splits a signal buffer into 16 sequential time-chunks;
+# each channel's firing TIME encodes that chunk's amplitude.
+# So WHICH channels fire (not just how many) tells you WHEN in the
+# buffer the energy showed up:
+#   - energy concentrated early  -> low-index channels fire  -> transient
+#   - energy concentrated late   -> high-index channels fire -> rising
+#   - energy spread evenly       -> most/all channels fire   -> steady
+
+neuron In0  threshold=50 leak=2 type=LIF
+neuron In1  threshold=50 leak=2 type=LIF
+neuron In2  threshold=50 leak=2 type=LIF
+neuron In3  threshold=50 leak=2 type=LIF
+neuron In4  threshold=50 leak=2 type=LIF
+neuron In5  threshold=50 leak=2 type=LIF
+neuron In6  threshold=50 leak=2 type=LIF
+neuron In7  threshold=50 leak=2 type=LIF
+neuron In8  threshold=50 leak=2 type=LIF
+neuron In9  threshold=50 leak=2 type=LIF
+neuron In10 threshold=50 leak=2 type=LIF
+neuron In11 threshold=50 leak=2 type=LIF
+neuron In12 threshold=50 leak=2 type=LIF
+neuron In13 threshold=50 leak=2 type=LIF
+neuron In14 threshold=50 leak=2 type=LIF
+neuron In15 threshold=50 leak=2 type=LIF
+
+neuron HiddenEarly threshold=70 leak=3 type=LIF
+neuron HiddenLate  threshold=70 leak=3 type=LIF
+neuron HiddenWide  threshold=70 leak=3 type=LIF
+
+neuron OutputTransient threshold=35 leak=2 type=LIF
+neuron OutputRising    threshold=35 leak=2 type=LIF
+neuron OutputSteady    threshold=35 leak=2 type=LIF
+
+connect In0  -> HiddenEarly weight=0.6
+connect In1  -> HiddenEarly weight=0.6
+connect In2  -> HiddenEarly weight=0.6
+connect In3  -> HiddenEarly weight=0.6
+connect In4  -> HiddenEarly weight=0.6
+connect In5  -> HiddenEarly weight=0.6
+
+connect In10 -> HiddenLate weight=0.6
+connect In11 -> HiddenLate weight=0.6
+connect In12 -> HiddenLate weight=0.6
+connect In13 -> HiddenLate weight=0.6
+connect In14 -> HiddenLate weight=0.6
+connect In15 -> HiddenLate weight=0.6
+
+connect In0  -> HiddenWide weight=0.15
+connect In1  -> HiddenWide weight=0.15
+connect In2  -> HiddenWide weight=0.15
+connect In3  -> HiddenWide weight=0.15
+connect In4  -> HiddenWide weight=0.15
+connect In5  -> HiddenWide weight=0.15
+connect In6  -> HiddenWide weight=0.15
+connect In7  -> HiddenWide weight=0.15
+connect In8  -> HiddenWide weight=0.15
+connect In9  -> HiddenWide weight=0.15
+connect In10 -> HiddenWide weight=0.15
+connect In11 -> HiddenWide weight=0.15
+connect In12 -> HiddenWide weight=0.15
+connect In13 -> HiddenWide weight=0.15
+connect In14 -> HiddenWide weight=0.15
+connect In15 -> HiddenWide weight=0.15
+
+connect HiddenEarly -> OutputTransient weight=0.8
+connect HiddenLate  -> OutputRising    weight=0.8
+connect HiddenWide  -> OutputSteady    weight=0.8
+
+action OutputTransient -> [EVENT_TRANSIENT]
+action OutputRising    -> [EVENT_RISING]
+action OutputSteady    -> [EVENT_STEADY]
+
+refractory=20ms
+learn=STDP rate=0.05

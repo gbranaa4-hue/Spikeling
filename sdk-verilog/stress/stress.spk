@@ -1,0 +1,12 @@
+# Spikeling Neural Configuration
+# Stress profile: large population, short refractory -> exercises throughput.
+# This is NOT your reflex profile; it's for benchmarking the engine at scale.
+neuron N0 threshold=110 leak=5
+neuron N1 threshold=110 leak=5
+neuron N2 threshold=110 leak=5
+neuron N3 threshold=110 leak=5
+neuron N4 threshold=110 leak=5
+neuron N5 threshold=110 leak=5
+neuron N6 threshold=110 leak=5
+neuron N7 threshold=110 leak=5
+refractory=4ms

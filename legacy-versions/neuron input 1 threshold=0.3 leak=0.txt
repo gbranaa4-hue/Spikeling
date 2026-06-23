@@ -1,0 +1,6 @@
+neuron <input 1> threshold=0.3 leak=0.05 refractory=1ms
+neuron <brain> threshold=0.3 leak=0.05 refractory=1ms
+synapse <input 1> -> <brain> weight=0.2 delay=1ms excitatory plastic
+pattern <PatternName1> = <input 1>
+train <PatternName1> -> <brain> for 12 trials
+test <PatternName1> -> <brain>

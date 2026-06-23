@@ -1,0 +1,18 @@
+# Spikeling Neural Configuration
+# Example: Binaural Sound Localizer
+# -----------------------------------
+# Demonstrates input processing + STDP learning
+
+neuron LeftMic  threshold=110 leak=5  type=LIF
+neuron RightMic threshold=110 leak=5  type=LIF
+neuron Motor    threshold=80  leak=3  type=LIF
+
+connect LeftMic  -> Motor weight=0.8
+connect RightMic -> Motor weight=0.8
+
+action LeftMic  -> [SOUND_LOCALIZED_LEFT]
+action RightMic -> [SOUND_LOCALIZED_RIGHT]
+action Motor    -> [MOTOR_FIRE]
+
+refractory=400ms
+learn=STDP rate=0.01

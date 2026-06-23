@@ -1,0 +1,21 @@
+# Spikeling Neural Configuration
+# stdlib/neurons.spk — Standard Neuron Library
+# ---------------------------------------------
+# Import this in your .spk files to use named neuron presets.
+# Usage: type=LIF | type=Izhikevich | type=AdEx
+
+# Leaky Integrate-and-Fire (LIF)
+# The standard workhorse. Simple, fast, biologically plausible.
+# threshold: membrane voltage to fire (mV equivalent)
+# leak:      how fast potential decays per tick (higher = faster decay)
+neuron_type LIF threshold=100 leak=5
+
+# Izhikevich (regular spiking cortical neuron)
+# More biologically realistic than LIF.
+# Models burst firing, adaptation, and resonance.
+neuron_type Izhikevich threshold=30 leak=2 a=0.02 b=0.2 c=-65 d=8
+
+# Adaptive Exponential (AdEx)
+# Best balance of realism and speed.
+# Models spike-frequency adaptation — neuron slows down under sustained input.
+neuron_type AdEx threshold=20 leak=4 delta=2 tau_w=100

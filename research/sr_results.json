@@ -1,0 +1,74 @@
+{
+  "experiment_1": {
+    "n_uncertain": 73,
+    "baseline_accuracy": 0.4520547945205479,
+    "avg_confidence": 0.5499856081602854,
+    "description": "Accuracy on uncertain examples with NO noise"
+  },
+  "experiment_2": {
+    "sweep": [
+      {
+        "sigma": 0.0,
+        "accuracy": 0.4520547945205479
+      },
+      {
+        "sigma": 0.05,
+        "accuracy": 0.4657534246575342
+      },
+      {
+        "sigma": 0.1,
+        "accuracy": 0.4520547945205479
+      },
+      {
+        "sigma": 0.2,
+        "accuracy": 0.4657534246575342
+      },
+      {
+        "sigma": 0.3,
+        "accuracy": 0.4246575342465753
+      },
+      {
+        "sigma": 0.5,
+        "accuracy": 0.4931506849315068
+      },
+      {
+        "sigma": 0.75,
+        "accuracy": 0.5068493150684932
+      },
+      {
+        "sigma": 1.0,
+        "accuracy": 0.4657534246575342
+      },
+      {
+        "sigma": 1.25,
+        "accuracy": 0.5068493150684932
+      },
+      {
+        "sigma": 1.5,
+        "accuracy": 0.4794520547945205
+      },
+      {
+        "sigma": 2.0,
+        "accuracy": 0.5616438356164384
+      },
+      {
+        "sigma": 3.0,
+        "accuracy": 0.4794520547945205
+      }
+    ],
+    "best_sigma": 2.0,
+    "best_accuracy": 0.5616438356164384,
+    "baseline_accuracy": 0.4520547945205479,
+    "improvement": 0.10958904109589046,
+    "description": "Noise sweep over uncertain examples"
+  },
+  "experiment_3": {
+    "optimal_sigma_from_A": 1.3684210526315788,
+    "accuracy_on_A_with_opt_sigma": 0.5833333333333334,
+    "baseline_accuracy_B": 0.4594594594594595,
+    "transfer_accuracy_B": 0.3783783783783784,
+    "transfer_improvement": -0.08108108108108109,
+    "transfers": false,
+    "description": "Does the optimal sigma found on half-A transfer to half-B?"
+  }
+}
