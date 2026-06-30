@@ -52,3 +52,16 @@ The same damped-oscillator idea is reused beyond Spikeling — in a fully
 nonlinear, coupled form — as the substrate in the physical
 reservoir-computing / symmetry work. This folder is the clean, minimal
 prototype of the primitive.
+
+**Cross-substrate generality test (run, negative result):**
+[`symmetry_selection_test.py`](symmetry_selection_test.py) tested whether
+the acoustic MEMS plate's even/odd symmetry selection rule (see
+`../../012-ternary/paper/cross_substrate_symmetry_findings.md`) reproduces
+on a bank of these Resonator units with a per-unit quadratic
+self-nonlinearity. It does not — see
+[`SYMMETRY_TEST_FINDINGS.md`](SYMMETRY_TEST_FINDINGS.md) for the full
+result and why (short version: this minimal single-channel reservoir
+can't do the even-order task at all regardless of symmetry, so there's
+nothing for symmetry-breaking to unlock; it does measurably hurt the
+odd-order memory that *is* present, the opposite of the acoustic plate's
+clean "odd ties" result).
