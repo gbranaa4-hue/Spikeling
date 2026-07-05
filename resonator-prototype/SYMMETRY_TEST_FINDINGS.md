@@ -77,6 +77,15 @@ already do the even task at R² roughly comparable to the acoustic
 baseline before re-testing whether symmetry-breaking adds anything on top.
 That's a different, larger experiment, not run here.
 
+**Update (2026-07-05): the fairer follow-up has now been run** — see
+`COUPLED_SYMMETRY_FINDINGS.md` / `coupled_symmetry_test.py`. With genuine
+inter-unit coupling, sign-diverse injection, sub-stepped integration, and
+the capability gate passed first (all-alive R²=0.53 on the product task,
+quadratic-free control at floor), the acoustic even/odd dichotomy
+**replicates**: mean even-order gap +0.254 (paired t up to +9.5), mean
+odd-order gap −0.003. The negative result below stands — it correctly
+identified that the bare uncoupled bank couldn't express the effect.
+
 ## Cross-reference
 
 See `../../012-ternary/paper/cross_substrate_symmetry_findings.md` for the
