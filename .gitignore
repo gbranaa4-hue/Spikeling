@@ -27,3 +27,7 @@ AcousticVortexTrap_Package_RENAME-to-zip.bin
 # OS
 .DS_Store
 Thumbs.db
+
+# --- Godot 4 ---
+# editor cache, regenerated on open (inline comments are NOT allowed on pattern lines)
+.godot/

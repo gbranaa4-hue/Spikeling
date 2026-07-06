@@ -1,0 +1,20 @@
+# Spikeling Neural Configuration
+# "Wary animal" fight-or-flee brain -- now with INHIBITION.
+#
+#   - Seeing the player builds toward FLEE.
+#   - Taking damage fires ATTACK *and* inhibits FLEE, so a hit makes the animal
+#     commit to fighting instead of running -- the brain arbitrates the two
+#     competing urges itself, no game-side logic needed.
+#
+# NEGATIVE synapse weight = inhibitory (it subtracts from the target's potential).
+
+neuron sight   threshold=100 leak=8
+neuron damage  threshold=30  leak=2
+neuron flee    threshold=100 leak=8
+neuron attack  threshold=60  leak=8
+
+synapse sight  -> flee   weight=90
+synapse damage -> attack weight=100
+synapse damage -> flee   weight=-120   # inhibition: being hit suppresses fleeing
+
+refractory=4

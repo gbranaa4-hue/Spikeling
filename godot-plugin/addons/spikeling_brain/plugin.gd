@@ -1,13 +1,13 @@
 @tool
 extends EditorPlugin
 
+# SpikelingBrain (and the Spikeling engine) register themselves via `class_name`
+# + `@icon`, so they're available as soon as this addon folder is in your
+# project -- enabling the plugin is optional. This entry just lists it in
+# Project Settings -> Plugins. (Registering the type again here via
+# add_custom_type would collide with the class_name and error in Godot 4.)
 func _enter_tree() -> void:
-	add_custom_type(
-		"SpikelingBrain",
-		"Node",
-		preload("spikeling_brain.gd"),
-		preload("icon.svg") if ResourceLoader.exists("res://addons/spikeling_brain/icon.svg") else null
-	)
+	pass
 
 func _exit_tree() -> void:
-	remove_custom_type("SpikelingBrain")
+	pass
