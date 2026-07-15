@@ -1,0 +1,18 @@
+# proximity_grid.spk
+# One LIF neuron per HC-SR04 sensor position -- fires when something gets
+# close enough to that specific sensor, driven by real Arduino serial data
+# via bridge.py.
+
+neuron Left        threshold=80 leak=5 type=LIF
+neuron Center      threshold=80 leak=5 type=LIF
+neuron UpperRight  threshold=80 leak=5 type=LIF
+neuron BottomLeft  threshold=80 leak=5 type=LIF
+neuron BottomRight threshold=80 leak=5 type=LIF
+
+action Left        -> [NEAR_LEFT]
+action Center      -> [NEAR_CENTER]
+action UpperRight  -> [NEAR_UPPER_RIGHT]
+action BottomLeft  -> [NEAR_BOTTOM_LEFT]
+action BottomRight -> [NEAR_BOTTOM_RIGHT]
+
+refractory=100ms

@@ -1,0 +1,58 @@
+# voice_commands.spk
+# One LIF neuron per voice command, fired by voice_commands.py when it
+# recognizes the matching spoken phrase. refractory=300ms doubles as
+# debounce -- can't double-fire the same command from a stray repeated word.
+
+neuron PlayPause threshold=50 leak=10 type=LIF
+neuron Next      threshold=50 leak=10 type=LIF
+neuron Previous  threshold=50 leak=10 type=LIF
+neuron VolUp     threshold=50 leak=10 type=LIF
+neuron VolDown   threshold=50 leak=10 type=LIF
+neuron Mute      threshold=50 leak=10 type=LIF
+neuron Screenshot threshold=50 leak=10 type=LIF
+neuron Report    threshold=50 leak=10 type=LIF
+neuron Search    threshold=50 leak=10 type=LIF
+neuron ComposeEmail threshold=50 leak=10 type=LIF
+neuron Knowledge threshold=50 leak=10 type=LIF
+neuron CodeSearch threshold=50 leak=10 type=LIF
+neuron Gif       threshold=50 leak=10 type=LIF
+neuron YouTube   threshold=50 leak=10 type=LIF
+neuron DateTime  threshold=50 leak=10 type=LIF
+neuron Sun       threshold=50 leak=10 type=LIF
+neuron ClaudeCode threshold=50 leak=10 type=LIF
+neuron FileSearch threshold=50 leak=10 type=LIF
+neuron SendFile   threshold=50 leak=10 type=LIF
+neuron Experiment threshold=50 leak=10 type=LIF
+neuron ScreenshotWeb threshold=50 leak=10 type=LIF
+neuron AgentTask   threshold=50 leak=10 type=LIF
+neuron HealthCheck threshold=50 leak=10 type=LIF
+neuron TribeWork   threshold=50 leak=10 type=LIF
+neuron TribeStatus threshold=50 leak=10 type=LIF
+
+action PlayPause    -> [CMD_PLAYPAUSE]
+action Next         -> [CMD_NEXT]
+action Previous     -> [CMD_PREVIOUS]
+action VolUp        -> [CMD_VOLUP]
+action VolDown      -> [CMD_VOLDOWN]
+action Mute         -> [CMD_MUTE]
+action Screenshot   -> [CMD_SCREENSHOT]
+action Report       -> [CMD_REPORT]
+action Search       -> [CMD_SEARCH]
+action ComposeEmail -> [CMD_COMPOSE_EMAIL]
+action Knowledge    -> [CMD_ASK_KNOWLEDGE]
+action CodeSearch   -> [CMD_CODE_SEARCH]
+action Gif          -> [CMD_GIF]
+action YouTube      -> [CMD_YOUTUBE]
+action DateTime     -> [CMD_DATETIME]
+action Sun          -> [CMD_SUN]
+action ClaudeCode   -> [CMD_CLAUDE_CODE]
+action FileSearch   -> [CMD_FILE_SEARCH]
+action SendFile     -> [CMD_SEND_FILE]
+action Experiment   -> [CMD_EXPERIMENT]
+action ScreenshotWeb -> [CMD_SCREENSHOT_WEB]
+action AgentTask     -> [CMD_AGENT_TASK]
+action HealthCheck   -> [CMD_HEALTH_CHECK]
+action TribeWork     -> [CMD_TRIBE_WORK]
+action TribeStatus   -> [CMD_TRIBE_STATUS]
+
+refractory=300ms

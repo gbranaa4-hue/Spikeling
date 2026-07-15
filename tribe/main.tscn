@@ -1,0 +1,20 @@
+[gd_scene load_steps=2 format=3]
+
+[sub_resource type="Environment" id="Env_1"]
+background_mode = 2
+ambient_light_source = 3
+ambient_light_energy = 0.6
+
+[node name="World" type="Node3D"]
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.7071, 0, 0.7071, 0.5793, 0.5736, -0.5793, -0.4056, 0.8192, 0.4056, 0, 0, 0)
+light_energy = 1.2
+shadow_enabled = true
+directional_shadow_mode = 2
+directional_shadow_blend_splits = true
+directional_shadow_max_distance = 200.0
+directional_shadow_fade_start = 0.8
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Env_1")

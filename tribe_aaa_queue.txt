@@ -1,0 +1,26 @@
+# Tribe AAA work queue -- consumed by the "work on tribe" Discord command.
+# One task per line (blank lines and #comments ignored). Lines are dispatched
+# top-to-bottom through the full pipeline; a line is marked done by appending
+# " @done" to it after it completes. FPS + high-graphics are front-loaded per
+# request. Add more lines any time (or pull from vault/AAA_Roadmap_Tribe.md).
+tribe: add an FPS counter overlay (top-left Label) that can be toggled with the F3 key, showing Engine.get_frames_per_second(). Keep it out of the way and off by default.   @done
+tribe: raise the graphics quality of main.tscn -- enable higher shadow quality on the Sun DirectionalLight3D and turn on MSAA 3D anti-aliasing in the project settings for smoother edges. Do not change gameplay.   @done
+tribe: add screen-space ambient occlusion (SSAO) to the WorldEnvironment in main.tscn for grounded, higher-fidelity lighting. Keep it tasteful, not overpowering.   @done
+tribe: add a graphics quality setting (Low / Medium / High) that adjusts shadow quality, SSAO, and MSAA at runtime, defaulting to High. Expose it so it can be changed from code or a future settings menu.   @done
+tribe: performance -- use the existing spatial_grid to skip Spikeling brain updates for agents that are far from the player/camera, so many tribes run smoothly. Do not change behavior for on-screen agents.   @done
+tribe: performance -- pool thrown_club instances instead of instancing a new one per throw, to avoid per-throw allocation hitches.   @done-REVERTED (pooling broke the throw in-engine -- club vanished instead of flying; reverted to fresh-instance. revisit only with Godot open to debug the runtime cause. low priority -- 3-club alloc is negligible.)
+tribe: add a directional-light shadow distance and bias tuning pass so shadows look crisp near the player and don't flicker. Visual quality only.   @done
+# === ALIVENESS FOCUS (make the world feel inhabited & reactive) ===
+tribe: give idle tribe members small ambient life in tribemember.gd -- occasional subtle idle fidgets (glance around, weight shift, look at a nearby member) using the existing body_anim/anim system, so members are never statue-still when idle. Keep it subtle and performant; do not interfere with orders, movement states, or formation.   @done
+tribe: make idle tribe members socially cluster in tribemember.gd -- when idle with no task, drift slowly toward the nearest higher-trust member and linger in a small group instead of scattering, so the camp looks inhabited. Do not override orders, formation, or the stay-near-work behavior; only affects idle wandering.
+tribe: add reactive contextual thoughts in tribemember.gd -- members occasionally voice a short thought (via the existing thought/label system) reacting to a nearby event: another member promoted, an animal downed nearby, their own hunger rising, or the player arriving. Keep it varied and not spammy (rate-limit per member).
+tribe: in tribemember.gd, when the player comes within ~2.5m a member briefly turns to face them and shows a short trust-flavored reaction (warm thought if high trust, wary if low), then returns to what it was doing. Do not change trust/order logic.
+tribe: give animals more lifelike ambient behavior in animal.gd -- graze, pause, and wander naturally, and flee when the player or a thrown club comes near, instead of static or robotic motion. Only touch animal.gd.   @done
+tribe: make dogs behave more doglike in dog.gd -- wander around camp, occasionally trot over to and orbit a nearby tribe member or the player, and react happily when fed. Only touch dog.gd.
+tribe: add a low ambient tribe-murmur/chatter audio that rises in volume with the number of tribe members near the player, so a bigger camp sounds alive. Keep it quiet and non-repetitive.
+# --- deprioritized (GPU cost; framerate-sensitive machine) ---
+# tribe: add a subtle god-ray / volumetric fog feel by enabling volumetric fog on the WorldEnvironment at a low, tasteful density. Keep framerate in mind.
+tribe: add a floating "+trust" number that rises and fades when a tribe member is fed, using the existing feed path. Clear visible feedback.
+tribe: add a brief white hit-flash on any character that takes damage, so combat reads clearly.
+tribe: add a pause menu (Esc) with Resume and Quit to Desktop, that pauses the game tree while open.
+tribe: add a settings panel (opened from the pause menu) with a master volume slider and the graphics quality selector, wired to actually apply.

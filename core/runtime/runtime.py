@@ -70,7 +70,7 @@ class NeuronState:
     threshold:          float
     leak:               float
     membrane_potential: float = 0.0
-    last_spike_time:    float = 0.0
+    last_spike_time:    float = float("-inf")
     fire_count:         int   = 0
 
 

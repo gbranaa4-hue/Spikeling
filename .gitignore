@@ -31,3 +31,24 @@ Thumbs.db
 # --- Godot 4 ---
 # editor cache, regenerated on open (inline comments are NOT allowed on pattern lines)
 .godot/
+
+# ── PRIVATE -- never publish (this repo is public) ──
+# gitignore has NO inline comments -- a trailing "# note" becomes part of the
+# pattern and silently matches nothing. Comments must be on their own line.
+
+# private research memory: findings, retired/negative results, honest ledger
+vault/
+# personal: every command ever typed to the bot
+voice_interaction_log.csv
+# TOTP enrolment QR (encodes the admin secret)
+admin_totp_qr*
+# generated write-and-run scratch scripts
+experiments/
+*.log
+clip_*.gif
+screenshot_*.png
+res_*.txt
+test_result*.txt
+
+# node deps for the react-render/screenshot pipeline (package.json declares them)
+node_modules/

@@ -10,7 +10,7 @@ module spikeling_resonators #(
     input  wire                   clk,
     input  wire                   rst,
     input  wire signed [WIDTH-1:0] drive,   // one shared sample feeds the whole bank
-    output reg                    detected [0:4]
+    output reg  [4:0]         detected
 );
 
     localparam integer N = 5;
