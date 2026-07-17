@@ -268,12 +268,25 @@ def tool_tier_for_subtask(subtask: str) -> str:
 #
 # Evidence comes from VaultLogger's own ledger entry: when a run spawned any
 # specialists, its framing (_vault_logger_task) asks it to state, per name,
-# VERDICT: <Name>: useful|unnecessary. Promotion requires a track record of
-# at least PROMOTION_THRESHOLD "useful" verdicts and ZERO "unnecessary"
-# verdicts, ever -- strict and one-sided on purpose, same "explicit stop
-# condition, no exceptions" discipline as MAX_DYNAMIC_SPECIALISTS: better to
-# under-promote than to bake a flaky specialist permanently into every future
-# run's topology.
+# VERDICT: <Name>: useful|unnecessary. Promotion is a WEIGHTED running score
+# (+1 useful, -1 unnecessary, unchanged on no verdict), promoted once the
+# score reaches PROMOTION_THRESHOLD.
+#
+# THIS WAS ORIGINALLY A STRICT BINARY AND-GATE (>=PROMOTION_THRESHOLD useful
+# AND zero unnecessary, ever) -- changed 2026-07-17 after cross-referencing
+# two real prior findings in this portfolio: consensus_scoping_rule_ladder.md
+# ("weighted combination beats voting exactly as long as the calibration-
+# time reliability ranking still holds") and this same file's OWN retracted
+# soft-conflict finding (plain weighted inhibition beat binary/ternary
+# gating on a structurally similar graded-evidence problem, same day).
+# MEASURED before changing this, not assumed (test_promotion_rule_comparison.py):
+# the strict AND rule only achieved 43.7% true-positive rate on specialists
+# that were GENUINELY 90%-useful, because one unlucky "unnecessary" verdict
+# out of several -- pure noise -- permanently blacklisted them. The weighted
+# rule recovers to 98% TPR at a false-positive cost of only +1.3% on
+# consistently-bad specialists (20% useful rate). This is the SAME pattern
+# as the scoping-rule finding: strict all-or-nothing consensus throws away
+# real signal that a weighted accumulation preserves.
 #
 # KNOWN GAP, found while testing this (test_structural_learning.py): there is
 # NO DEMOTION PATH. Once a name is promoted, it's part of the fixed roster
@@ -311,13 +324,13 @@ def save_specialist_history(history: dict) -> None:
 
 
 def promoted_specialists(history: dict = None) -> list:
-    """Names with a strictly positive track record: >=PROMOTION_THRESHOLD
-    'useful' verdicts and zero 'unnecessary' ones, ever."""
+    """Names whose running weighted score has reached PROMOTION_THRESHOLD --
+    see the STRUCTURAL LEARNING comment above for why this is a weighted
+    accumulation, not a strict AND-gate."""
     history = load_specialist_history() if history is None else history
     return sorted(
         name for name, rec in history.items()
-        if rec.get("judged_useful", 0) >= PROMOTION_THRESHOLD
-        and rec.get("unnecessary", 0) == 0
+        if rec.get("score", 0) >= PROMOTION_THRESHOLD
     )
 
 
@@ -450,13 +463,23 @@ class SpikingPipeline:
         verdicts = {name.lower(): v.lower() for name, v in VERDICT_RE.findall(vault_output or "")}
         history = load_specialist_history()
         for name in self._dynamic_specialists:
-            rec = history.setdefault(name, {"spawned": 0, "judged_useful": 0, "unnecessary": 0})
+            # judged_useful/unnecessary are kept as human-readable diagnostics
+            # (visible in the raw JSON); "score" is the actual weighted
+            # running total promoted_specialists() decides on -- see the
+            # STRUCTURAL LEARNING comment for why this isn't just
+            # judged_useful - unnecessary computed fresh each time (it's the
+            # same value here since both start at 0, but "score" existing as
+            # its own field makes the promotion rule's logic independent of
+            # how the diagnostic counters are named/shaped).
+            rec = history.setdefault(name, {"spawned": 0, "judged_useful": 0, "unnecessary": 0, "score": 0})
             rec["spawned"] += 1
             verdict = verdicts.get(name.lower())
             if verdict == "useful":
                 rec["judged_useful"] += 1
+                rec["score"] += 1
             elif verdict == "unnecessary":
                 rec["unnecessary"] += 1
+                rec["score"] -= 1
         save_specialist_history(history)
 
     def _maybe_spawn_specialist(self, source_neuron: str, output: str) -> None:

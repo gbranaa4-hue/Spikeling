@@ -59,7 +59,8 @@ def check_1_verdict_parsing() -> bool:
     _run_and_verdict("DBMigrator", "useful", history_path)
     history = so.load_specialist_history()
     rec = history.get("DBMigrator", {})
-    ok = rec.get("spawned") == 1 and rec.get("judged_useful") == 1 and rec.get("unnecessary", 0) == 0
+    ok = (rec.get("spawned") == 1 and rec.get("judged_useful") == 1
+          and rec.get("unnecessary", 0) == 0 and rec.get("score") == 1)
     print(f"  [{'PASS' if ok else 'FAIL'}] 1. verdict parsing: DBMigrator record={rec}")
     return ok
 
@@ -86,23 +87,40 @@ def check_3_promotion_fires() -> bool:
     return ok
 
 
-def check_4_one_bad_verdict_blocks() -> bool:
-    # the bad verdict must land BEFORE promotion ever fires -- once promoted,
-    # a name becomes part of the fixed roster and a fresh spawn_request for
-    # it is correctly deduped (it already exists), so it stops accumulating
-    # NEW evidence via this path. That's a real, separate limitation (no
-    # demotion path once promoted -- noted in STRUCTURAL LEARNING follow-
-    # ups) and not what this check is testing: this checks that one early
-    # 'unnecessary' verdict permanently blocks promotion even after many
-    # useful verdicts arrive afterward.
+def check_4_recovers_from_one_early_bad_verdict() -> bool:
+    # CHANGED 2026-07-17: promotion is now a WEIGHTED running score, not a
+    # strict AND-gate -- see the STRUCTURAL LEARNING comment in
+    # spiking_orchestrator.py for the cross-referenced finding this is
+    # based on (consensus_scoping_rule_ladder.md + this project's own
+    # retracted soft-conflict result: weighted evidence beats strict
+    # binary/ternary gating). This check now verifies the INTENDED recovery
+    # behavior directly: one early unlucky 'unnecessary' verdict on a
+    # genuinely good specialist should NOT permanently block it if enough
+    # good evidence follows -- the bad verdict must land BEFORE promotion
+    # ever fires (once promoted, a name is deduped against future spawns,
+    # a separate, documented limitation -- not what this checks).
     history_path = _isolated_history_path()
-    _run_and_verdict("Flaky", "unnecessary", history_path)
+    _run_and_verdict("Recovers", "unnecessary", history_path)
     for _ in range(so.PROMOTION_THRESHOLD + 2):
-        _run_and_verdict("Flaky", "useful", history_path)
+        _run_and_verdict("Recovers", "useful", history_path)
     promoted = so.promoted_specialists()
-    ok = "Flaky" not in promoted
-    print(f"  [{'PASS' if ok else 'FAIL'}] 4. one early 'unnecessary' verdict blocks promotion even "
-          f"after {so.PROMOTION_THRESHOLD + 2} useful ones afterward: promoted={promoted}")
+    ok = "Recovers" in promoted
+    print(f"  [{'PASS' if ok else 'FAIL'}] 4. recovers from one early 'unnecessary' verdict given "
+          f"{so.PROMOTION_THRESHOLD + 2} useful ones afterward: promoted={promoted}")
+    return ok
+
+
+def check_4b_consistently_bad_never_promotes() -> bool:
+    # the weighted rule's safety property: a specialist that's ALWAYS judged
+    # unnecessary must never accumulate a positive score, regardless of how
+    # many times it's spawned.
+    history_path = _isolated_history_path()
+    for _ in range(so.PROMOTION_THRESHOLD + 3):
+        _run_and_verdict("NeverGood", "unnecessary", history_path)
+    promoted = so.promoted_specialists()
+    ok = "NeverGood" not in promoted
+    print(f"  [{'PASS' if ok else 'FAIL'}] 4b. consistently 'unnecessary' verdicts never promote "
+          f"(safety holds under the weighted rule too): promoted={promoted}")
     return ok
 
 
@@ -147,7 +165,8 @@ def run() -> None:
             check_1_verdict_parsing(),
             check_2_below_threshold_no_promotion(),
             check_3_promotion_fires(),
-            check_4_one_bad_verdict_blocks(),
+            check_4_recovers_from_one_early_bad_verdict(),
+            check_4b_consistently_bad_never_promotes(),
             check_5_promoted_is_built_in(),
             check_6_no_verdict_is_neutral(),
         ]
