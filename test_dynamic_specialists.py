@@ -111,6 +111,48 @@ def check_6_non_implementer_source() -> bool:
     return ok
 
 
+def check_7_tool_tier_selection() -> bool:
+    cases = [
+        ("write the schema migration", "code"),
+        ("do a security review of the new auth path", "review"),
+        ("benchmark the new reservoir memory capacity", "research"),
+        ("research and benchmark, then review the results for correctness", "research_review"),
+    ]
+    results = [so.tool_tier_for_subtask(subtask) == expected for subtask, expected in cases]
+    ok = all(results)
+    for (subtask, expected), got_ok in zip(cases, results):
+        got = so.tool_tier_for_subtask(subtask)
+        status = "ok" if got_ok else f"WRONG (got {got})"
+        print(f"      {subtask[:45]:47} -> expected {expected:<16} {status}")
+    print(f"  [{'PASS' if ok else 'FAIL'}] 7. tool tier selection picks the right tier "
+          f"from subtask content (a spawned 'review'-type specialist never gets write access)")
+    return ok
+
+
+def check_8_framing_unchanged_when_nothing_spawned() -> bool:
+    # the whole point of making these note-based rather than always-on: a
+    # run where nothing spawns must produce EXACTLY the prompt text this
+    # pipeline sent before this feature existed, so real-mode behavior for
+    # the common case (no spawn) is provably unaffected.
+    p = so.SpikingPipeline("rename x to y", dry_run=True)
+    p.rt
+    reviewer_ok = p._reviewer_task() == "Peer-review the change for: rename x to y. Read-only. Call out overclaiming."
+    corrector_ok = p._corrector_task() == "Fix exactly what review flagged for: rename x to y"
+    ok = reviewer_ok and corrector_ok
+    print(f"  [{'PASS' if ok else 'FAIL'}] 8. framing byte-identical to pre-feature when nothing spawned "
+          f"(reviewer={reviewer_ok}, corrector={corrector_ok})")
+    return ok
+
+
+def check_9_framing_mentions_spawn_when_present() -> bool:
+    p = so.SpikingPipeline("rename x to y", dry_run=True)
+    p.rt
+    p._maybe_spawn_specialist("Implementer", "NEEDS_SPECIALIST: DBMigrator: write the schema migration")
+    ok = "DBMigrator" in p._reviewer_task() and "DBMigrator" in p._corrector_task()
+    print(f"  [{'PASS' if ok else 'FAIL'}] 9. framing mentions the spawned specialist by name when present")
+    return ok
+
+
 def run() -> None:
     print("=" * 74)
     print("  DYNAMIC SPECIALISTS -- wired into the real pipeline")
@@ -122,6 +164,9 @@ def run() -> None:
         check_4_growth_cap_holds(),
         check_5_multi_spawn_one_output(),
         check_6_non_implementer_source(),
+        check_7_tool_tier_selection(),
+        check_8_framing_unchanged_when_nothing_spawned(),
+        check_9_framing_mentions_spawn_when_present(),
     ]
     print()
     if all(results):

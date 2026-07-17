@@ -227,6 +227,33 @@ def gate_review(review_output: str) -> dict:
 SPAWN_SPECIALIST_RE = re.compile(r"NEEDS_SPECIALIST:\s*(\w+):\s*(.+)")
 MAX_DYNAMIC_SPECIALISTS = 2
 
+# Tool-access tier for a dynamically-spawned specialist, picked from what its
+# subtask actually asks for -- WITHOUT this, every spawned specialist got the
+# same full-edit tool set regardless of what it's for, which is both
+# unhelpful (a research task never gets Bash) and a real safety mismatch (a
+# "security review" or "audit" specialist would get Write/Edit access, the
+# exact thing the REAL Reviewer is deliberately denied for the same reason:
+# "read-only, can't edit to make a claim pass"). Module-level and keyword-
+# only (not an LLM call) so it's cheap and independently unit-testable.
+_REVIEW_KEYWORDS = re.compile(r"\b(review|audit|read-?only|assess|inspect)\b", re.I)
+_RESEARCH_KEYWORDS = re.compile(r"\b(benchmark|measure|research|experiment|profile)\b", re.I)
+
+
+def tool_tier_for_subtask(subtask: str) -> str:
+    """Returns one of 'review' / 'research_review' / 'research' / 'code'.
+    Mirrors the fixed roster's own tiers (voice_commands.REVIEW_TOOLS /
+    RESEARCH_REVIEW_TOOLS / RESEARCH_CODE_TOOLS / CLAUDE_CODE_TOOLS) --
+    _run_real_agent() resolves the tier name to the actual tool list."""
+    is_review = bool(_REVIEW_KEYWORDS.search(subtask))
+    is_research = bool(_RESEARCH_KEYWORDS.search(subtask))
+    if is_review and is_research:
+        return "research_review"
+    if is_review:
+        return "review"
+    if is_research:
+        return "research"
+    return "code"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # THE PIPELINE
@@ -394,6 +421,18 @@ class SpikingPipeline:
         tools = getattr(vc, "CLAUDE_CODE_TOOLS", None)
         if neuron == "Reviewer":
             tools = getattr(vc, "REVIEW_TOOLS", tools)
+        elif neuron in self._specialist_tasks:
+            # dynamically-spawned specialist -- pick its tier from what its
+            # subtask actually asks for, don't default everyone to full edit
+            # access (see tool_tier_for_subtask()'s docstring for why that
+            # was a real safety mismatch, not just an ergonomics gap)
+            tier = tool_tier_for_subtask(self._specialist_tasks[neuron])
+            tools = {
+                "review":          getattr(vc, "REVIEW_TOOLS", tools),
+                "research_review": getattr(vc, "RESEARCH_REVIEW_TOOLS", tools),
+                "research":        getattr(vc, "RESEARCH_CODE_TOOLS", tools),
+                "code":            tools,
+            }[tier]
         return vc.do_claude_code(task=self._agent_task(neuron), tools=tools) or ""
 
     # Applies to EVERY working specialist -- Reviewer, PreRegister, Corrector,
@@ -427,12 +466,35 @@ class SpikingPipeline:
             "PreRegister": f"Before any edit, state ONE falsifiable claim about what this change will do: {self.task}",
             "Implementer": self.task,
             "TestWriter":  f"Add or adjust tests for: {self.task}",
-            "Reviewer":    f"Peer-review the change for: {self.task}. Read-only. Call out overclaiming.",
-            "Corrector":   f"Fix exactly what review flagged for: {self.task}",
+            "Reviewer":    self._reviewer_task(),
+            "Corrector":   self._corrector_task(),
             "VaultLogger": self._vault_logger_task(),
         }
         base = frames.get(neuron, self.task)
         return base if neuron in self._NO_SPAWN_HINT else base + self._SPAWN_HINT
+
+    def _dynamic_specialists_note(self, verb: str) -> str:
+        """Shared by _reviewer_task/_corrector_task/_vault_logger_task -- a
+        review or correction pass that fires structurally AFTER a spawn
+        (via the ref -> Reviewer synapse) still has no idea the spawn
+        happened unless the task text says so; firing order alone doesn't
+        tell an LLM call what changed. Returns '' when nothing was spawned,
+        so the framing is byte-identical to before this feature existed."""
+        if not self._dynamic_specialists:
+            return ""
+        return (f" This task also involved {len(self._dynamic_specialists)} "
+                f"dynamically-spawned specialist(s) that weren't part of the "
+                f"original plan: {', '.join(self._dynamic_specialists)}. "
+                f"{verb} their work specifically, not just the original change.")
+
+    def _reviewer_task(self) -> str:
+        note = self._dynamic_specialists_note("Check")
+        return f"Peer-review the change for: {self.task}.{note} Read-only. Call out overclaiming."
+
+    def _corrector_task(self) -> str:
+        base = f"Fix exactly what review flagged for: {self.task}"
+        note = self._dynamic_specialists_note("Factor in")
+        return f"{base}.{note}" if note else base   # no note -> byte-identical to before this feature
 
     def _vault_logger_task(self) -> str:
         note = ""
