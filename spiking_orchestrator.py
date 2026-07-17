@@ -127,6 +127,70 @@ RESEARCH_PROJECTS = {"phononics", "ternary", "methodlm", "symmetry", "quasicryst
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# TERNARY GATE — Reviewer output -> correct-or-not
+#
+# First real wiring of the trit-gate pattern validated in
+# test_soft_conflicts.py's ternary_gated scheduler (see spiking_agent_pipeline.md
+# memory). The old logic was a single flat keyword match -- any hit = correct,
+# no hit = clean. That collapses "one nitpick" and "breaks the build" into the
+# same decision. This scores a SEVERITY in [0,1] instead and bands it into
+# hard_safe / ambiguous / hard_unsafe.
+#
+# HONEST NOTE, found by testing before trusting: the scheduler's ternary gate
+# saved real cost by skipping an expensive SNN network build in the hard
+# bands. The FIRST version of this gate copied that shape literally -- only
+# checking escalation/hedge markers (critical, security, regression, minor,
+# typo...) inside the ambiguous band -- and that was a bug, not an
+# optimization: those markers are substring checks, exactly as cheap as the
+# base issue-markers, so there was no real cost being saved. It also produced
+# a false negative: "Found a critical security issue... this introduces a
+# regression" scored severity=0.15 from "issue" alone, landed in hard_safe,
+# and the escalation language was never even looked at. The domain has no
+# real cost asymmetry to exploit (unlike the scheduler, where the ambiguous
+# band gated actual expensive computation) -- so ALL markers are scored
+# together, always, and bands are read off the combined severity.
+# ─────────────────────────────────────────────────────────────────────────────
+REVIEW_GATE_HI = 0.65   # severity at/above this: certain issues, correct
+REVIEW_GATE_LO = 0.15   # severity at/below this: certain clean, skip
+
+_STRONG_ISSUE_MARKERS = ["wrong", "fails", "incorrect", "breaks", "bug", "broken", "crash"]
+_WEAK_ISSUE_MARKERS = ["missing", "overclaim", "issue", "does not", "doesn't", "should"]
+_UPGRADE_MARKERS = ["critical", "major", "security", "data loss", "regression", "breaks the build"]
+_DOWNGRADE_MARKERS = ["minor", "nit", "nitpick", "trivial", "typo", "style", "cosmetic"]
+
+
+def _review_severity(review_output: str) -> float:
+    low = review_output.lower()
+    score = 0.0
+    for m in _STRONG_ISSUE_MARKERS:
+        if m in low:
+            score += 0.30
+    for m in _WEAK_ISSUE_MARKERS:
+        if m in low:
+            score += 0.15
+    for m in _UPGRADE_MARKERS:
+        if m in low:
+            score += 0.35
+    for m in _DOWNGRADE_MARKERS:
+        if m in low:
+            score -= 0.20
+    return max(0.0, min(1.0, score))
+
+
+def gate_review(review_output: str) -> dict:
+    """Classify a review into a trit band and a correct/skip decision.
+    Returns {decision, band, severity} -- logged so the gate's real-world
+    calibration can be checked later, the same honest-benchmark discipline
+    used on the scheduler (see spiking_agent_pipeline.md)."""
+    severity = _review_severity(review_output)
+    if severity >= REVIEW_GATE_HI:
+        return {"decision": True, "band": "hard_unsafe", "severity": severity}
+    if severity <= REVIEW_GATE_LO:
+        return {"decision": False, "band": "hard_safe", "severity": severity}
+    return {"decision": severity >= 0.5, "band": "ambiguous", "severity": severity}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # THE PIPELINE
 # ─────────────────────────────────────────────────────────────────────────────
 class SpikingPipeline:
@@ -141,6 +205,7 @@ class SpikingPipeline:
         self._clock = 0.0                    # sim ms; advances per agent so re-fires clear refractory
         self._followups: list[tuple] = []    # result-driven stimulations to apply after the cascade
         self._corrections = 0
+        self._review_gates: list[dict] = []  # every real gate_review() call, for calibration logging
 
         with open(BRAIN, encoding="utf-8") as f:
             ast = SpikelingParser().parse(f.read())
@@ -163,9 +228,9 @@ class SpikingPipeline:
     def _review_reports_issues(self, review_output: str) -> bool:
         if self.dry_run:
             return self.review_finds_issues and self._corrections < 1
-        low = review_output.lower()
-        return any(k in low for k in ["issue", "bug", "incorrect", "overclaim",
-                                      "missing", "wrong", "fails", "does not"])
+        gate = gate_review(review_output)
+        self._review_gates.append(gate)
+        return gate["decision"]
 
     def _run_agent(self, neuron: str) -> str:
         """Fire the agent. dry_run just records intent (no tokens); real mode
@@ -265,6 +330,7 @@ class SpikingPipeline:
             "agents_run": result["agents_run"],
             "clarified": result.get("clarified", False),
             "agents_skipped": result["agents_skipped"],
+            "review_gates": self._review_gates,   # calibration data for the ternary review gate
         }
         try:
             with open(DECISIONS_LOG, "a", encoding="utf-8") as f:
