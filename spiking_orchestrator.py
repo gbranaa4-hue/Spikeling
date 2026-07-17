@@ -205,21 +205,51 @@ def gate_review(review_output: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# DYNAMIC SPECIALISTS -- the self-growing-network capability wired into the
+# real pipeline (see test_self_growing_network.py, spiking_agent_pipeline.md).
+#
+# Today's topology is FIXED at construction: seven specialists, decided in
+# advance. But an agent can discover mid-task that it needs a sub-specialist
+# nobody anticipated. If it says so in its output, the pipeline spawns one
+# LIVE -- a real neuron, wired in and reviewed like any other -- instead of
+# either ignoring the request or forcing everything through Implementer.
+#
+# Convention: an agent signals this by including a line
+#   NEEDS_SPECIALIST: <Name>: <what it should do>
+# in its output. Deliberately simple and grep-able rather than structured,
+# so it's easy for a real Claude Code call to produce reliably.
+#
+# GROWTH IS CAPPED, explicitly -- same lesson as DRIVE_FLOOR in the earlier
+# scheduler hang: a live-growing mechanism with no stop condition is a real
+# runaway risk, not hypothetical. At most MAX_DYNAMIC_SPECIALISTS new
+# neurons per pipeline run, and never the same name twice.
+# ─────────────────────────────────────────────────────────────────────────────
+SPAWN_SPECIALIST_RE = re.compile(r"NEEDS_SPECIALIST:\s*(\w+):\s*(.+)")
+MAX_DYNAMIC_SPECIALISTS = 2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # THE PIPELINE
 # ─────────────────────────────────────────────────────────────────────────────
 class SpikingPipeline:
     def __init__(self, task: str, project: str = "spikeling", dry_run: bool = True,
-                 review_finds_issues: bool = False):
+                 review_finds_issues: bool = False, spawn_request: tuple = None):
         self.task = task
         self.project = project
         self.dry_run = dry_run
         self.review_finds_issues = review_finds_issues   # demo knob for the correct path
+        # demo/test knob for dynamic specialists: (source_neuron, new_name, subtask) --
+        # in dry_run mode, source_neuron's output includes the NEEDS_SPECIALIST marker
+        # so the spawn mechanism is exercisable without a real agent call.
+        self.spawn_request = spawn_request
         self.fired: list[str] = []          # order agents actually ran
         self.outputs: dict[str, str] = {}
         self._clock = 0.0                    # sim ms; advances per agent so re-fires clear refractory
         self._followups: list[tuple] = []    # result-driven stimulations to apply after the cascade
         self._corrections = 0
         self._review_gates: list[dict] = []  # every real gate_review() call, for calibration logging
+        self._specialist_tasks: dict = {}    # dynamic specialists' subtask text, for _agent_task()
+        self._dynamic_specialists: list[str] = []   # spawned this run, for the growth cap + logging
 
         self.rt = self._build_brain()
 
@@ -228,8 +258,16 @@ class SpikingPipeline:
         file's comments for the design rationale), directly via pyspike
         instead of parsing it as text. Every neuron/weight/leak value here
         must match agent_brain.spk -- there's no automatic sync, see the
-        module docstring above."""
-        net = Net(refractory_ms=40)
+        module docstring above.
+
+        Built LIVE (build_live(), not build()) so a specialist's handler can
+        spawn a new specialist mid-run -- see _maybe_spawn_specialist() and
+        the DYNAMIC SPECIALISTS section above. This changes nothing about the
+        static topology itself (verified byte-identical to the batch-built
+        version in test_pyspike_orchestrator_parity.py); it only makes growth
+        possible after construction."""
+        self._net = net = Net(refractory_ms=40)
+        rt = net.build_live()
 
         # sensory layer (stimulated 0..100 by score_task)
         S_Work      = net.neuron("S_Work",      threshold=50, leak=1)
@@ -238,8 +276,10 @@ class SpikingPipeline:
         S_Tests     = net.neuron("S_Tests",     threshold=50, leak=1)
         S_Research  = net.neuron("S_Research",  threshold=50, leak=1)   # currently unwired, same as the .spk
 
-        # specialists -- one neuron per agent
-        specialists = {name: net.neuron(name, threshold=50, leak=2) for name in COMMANDS}
+        # specialists -- one neuron per agent. self._specialists is kept
+        # (not a local) because _maybe_spawn_specialist() adds to it later.
+        self._specialists = {name: net.neuron(name, threshold=50, leak=2) for name in COMMANDS}
+        specialists = self._specialists
 
         # flow (mirrors agent_brain.spk's "FLOW" section exactly)
         S_Work.to(specialists["Implementer"], weight=1.2)
@@ -259,19 +299,64 @@ class SpikingPipeline:
         for name in COMMANDS:
             net.action(specialists[name])(self._make_handler(name))
 
-        return net.build()
+        return rt
 
     def _make_handler(self, neuron: str):
         def handler():
             self.fired.append(neuron)
             out = self._run_agent(neuron)
             self.outputs[neuron] = out
+            self._maybe_spawn_specialist(neuron, out)
             # RESULT-DRIVEN ROUTING: review is the gate. Only a review that
             # reports issues wakes the Corrector, and only a couple of times.
             if neuron == "Reviewer" and self._review_reports_issues(out) and self._corrections < 2:
                 self._corrections += 1
                 self._followups.append(("Corrector", 60.0))
         return handler
+
+    def _maybe_spawn_specialist(self, source_neuron: str, output: str) -> None:
+        """If `output` asks for a specialist that doesn't exist yet, spawn one
+        LIVE: a real neuron, wired into Reviewer (every dynamic specialist
+        gets reviewed too, same as the fixed ones), with a real handler
+        attached. Capped and deduped -- see the DYNAMIC SPECIALISTS module
+        comment for why that's not optional.
+
+        DELIBERATELY NOT wired with a static synapse FROM source_neuron.
+        Two things were tried and rejected by this file's own test
+        (test_dynamic_specialists.py) before landing here:
+          - a direct source_neuron -> ref synapse fires ref in the SAME
+            cascade instant as source_neuron (handlers run before
+            propagation, propagation reads a live synapse list) -- but then
+            ref -> Reviewer tries to fire Reviewer AT THAT SAME INSTANT,
+            and Reviewer is still refractory-locked from firing moments
+            earlier in the same cascade, so the review silently never
+            happens (found: Reviewer only fired once when it should fire
+            twice).
+          - combining that synapse WITH a followup double-fires ref itself
+            (found: DBMigrator fired twice).
+        The working pattern is the SAME one already used for Corrector:
+        whether to spawn depends on the agent's OUTPUT, so it's injected as
+        a followup stimulation at an ADVANCED clock time, not a static
+        synapse -- by the time it fires, Reviewer's refractory has cleared,
+        so ref -> Reviewer (a static synapse, like Corrector -> Reviewer)
+        correctly cascades into a real second review."""
+        m = SPAWN_SPECIALIST_RE.search(output or "")
+        if not m:
+            return
+        name, subtask = m.group(1), m.group(2).strip()
+        if name in self._specialists:
+            return   # dedupe -- never spawn the same name twice
+        if len(self._dynamic_specialists) >= MAX_DYNAMIC_SPECIALISTS:
+            return   # explicit growth cap -- see DRIVE_FLOOR lesson in the memory notes
+
+        ref = self._net.neuron(name, threshold=50, leak=2)
+        self._specialists[name] = ref
+        self._specialist_tasks[name] = subtask
+        self._dynamic_specialists.append(name)
+
+        self._net.action(ref)(self._make_handler(name))
+        ref.to(self._specialists["Reviewer"], weight=1.2)
+        self._followups.append((name, 60.0))
 
     def _review_reports_issues(self, review_output: str) -> bool:
         if self.dry_run:
@@ -284,7 +369,11 @@ class SpikingPipeline:
         """Fire the agent. dry_run just records intent (no tokens); real mode
         calls into voice_commands.do_claude_code with the right preamble/tools."""
         if self.dry_run:
-            return f"[dry-run] {neuron} would run on: {self.task[:60]}"
+            out = f"[dry-run] {neuron} would run on: {self.task[:60]}"
+            if self.spawn_request and self.spawn_request[0] == neuron:
+                _, name, subtask = self.spawn_request
+                out += f"\nNEEDS_SPECIALIST: {name}: {subtask}"
+            return out
         return self._run_real_agent(neuron)
 
     def _run_real_agent(self, neuron: str) -> str:
@@ -302,6 +391,10 @@ class SpikingPipeline:
 
     def _agent_task(self, neuron: str) -> str:
         # each specialist gets the task framed for its job
+        if neuron in self._specialist_tasks:
+            # a dynamically-spawned specialist gets the subtask IT was
+            # requested to do, not the top-level task
+            return self._specialist_tasks[neuron]
         frames = {
             "PreRegister": f"Before any edit, state ONE falsifiable claim about what this change will do: {self.task}",
             "Implementer": self.task,
@@ -379,6 +472,7 @@ class SpikingPipeline:
             "clarified": result.get("clarified", False),
             "agents_skipped": result["agents_skipped"],
             "review_gates": self._review_gates,   # calibration data for the ternary review gate
+            "dynamic_specialists": self._dynamic_specialists,   # live-spawned specialists this run
         }
         try:
             with open(DECISIONS_LOG, "a", encoding="utf-8") as f:
