@@ -1,0 +1,19 @@
+# topological_bank.spk
+# 8-Resonator neuromorphic bank -- the "self-healing" test: are these
+# neurons SSH-topologically coupled such that killing one doesn't crash
+# the whole bank, but degrades gracefully? Parsed via Spikeling's real
+# SpikelingParser (not reconstructed) -- coupling itself is added on top
+# in topological_bank.py, reusing the validated ssh_H dimerization from
+# tonight's topological-phononics work.
+
+neuron R0 type=Resonator freq=220 damping=0.05
+neuron R1 type=Resonator freq=220 damping=0.05
+neuron R2 type=Resonator freq=220 damping=0.05
+neuron R3 type=Resonator freq=220 damping=0.05
+neuron R4 type=Resonator freq=220 damping=0.05
+neuron R5 type=Resonator freq=220 damping=0.05
+neuron R6 type=Resonator freq=220 damping=0.05
+neuron R7 type=Resonator freq=220 damping=0.05
+
+action R0 -> [BANK_EDGE_LOW]
+action R7 -> [BANK_EDGE_HIGH]

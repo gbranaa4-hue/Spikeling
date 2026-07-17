@@ -28,6 +28,18 @@ import os
 from typing import Optional, Callable
 from dataclasses import dataclass, field
 
+
+def _leak_toward_zero(potential: float, leak: float) -> float:
+    """Move a membrane potential toward rest (0) by `leak`, from EITHER side.
+    Positive potentials decay down exactly as the original code did; negative
+    ones (created by INHIBITORY synapses, weight < 0) recover UP toward 0 rather
+    than being snapped straight to 0 -- so hyperpolarization fades gradually and
+    an inhibitory veto lasts a few ticks instead of one."""
+    if potential > 0.0:
+        return max(0.0, potential - leak)
+    return min(0.0, potential + leak)
+
+
 # ─────────────────────────────────────────────
 #  Cross-platform keyboard input
 # ─────────────────────────────────────────────
@@ -70,7 +82,7 @@ class NeuronState:
     threshold:          float
     leak:               float
     membrane_potential: float = 0.0
-    last_spike_time:    float = 0.0
+    last_spike_time:    float = float("-inf")
     fire_count:         int   = 0
 
 
@@ -297,8 +309,10 @@ class SpikelingRuntime:
         if elapsed < self.refractory_ms:
             return None
 
-        # Leak
-        n.membrane_potential = max(0.0, n.membrane_potential - n.leak)
+        # Leak toward REST (0) from either side: positive potentials decay down
+        # exactly as before; negative ones (from inhibition) recover UP toward 0
+        # instead of being snapped to 0, so hyperpolarization fades gradually.
+        n.membrane_potential = _leak_toward_zero(n.membrane_potential, n.leak)
 
         # Input drive
         n.membrane_potential += drive
@@ -316,7 +330,7 @@ class SpikelingRuntime:
         Applies leak decay to every neuron.
         """
         for n in self.neurons.values():
-            n.membrane_potential = max(0.0, n.membrane_potential - n.leak)
+            n.membrane_potential = _leak_toward_zero(n.membrane_potential, n.leak)
 
     def step_resonators(self, drive: float, dt: float, current_time_ms: float = 0.0) -> list[str]:
         """
@@ -368,7 +382,15 @@ class SpikelingRuntime:
                     if elapsed < self.refractory_ms:
                         continue  # downstream is refractory-locked
 
-                    downstream.membrane_potential += syn.weight * 50.0
+                    # INHIBITION: a negative weight subtracts. We let the target
+                    # go NEGATIVE (hyperpolarize) -- that's what gives inhibition
+                    # real VETO power: a deficit that later excitation has to climb
+                    # back out of before it can fire, not just a cancel of charge
+                    # already there. Bounded at -threshold so one inhibitory spike
+                    # can't create an unrecoverable well; leak walks it back to 0.
+                    downstream.membrane_potential = max(
+                        -downstream.threshold,
+                        downstream.membrane_potential + syn.weight * 50.0)
 
                     # STDP: update weight based on spike timing
                     if self.learner:

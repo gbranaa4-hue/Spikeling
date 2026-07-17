@@ -1,0 +1,26 @@
+{
+  "name": "spikeling",
+  "version": "1.0.0",
+  "description": "A neuromorphic **domain-specific language and runtime for spiking neural\r networks**, by Gavin Branaa. You describe a network of spiking neurons and\r synapses in a compact `.spk` file, and run that one description on any of four\r backends:",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gbranaa4-hue/Spikeling.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/gbranaa4-hue/Spikeling/issues"
+  },
+  "homepage": "https://github.com/gbranaa4-hue/Spikeling#readme",
+  "dependencies": {
+    "esbuild": "^0.28.1",
+    "playwright": "^1.61.1",
+    "react-dom": "^19.2.7"
+  }
+}

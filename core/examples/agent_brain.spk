@@ -1,0 +1,82 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# agent_brain.spk — THE AGENT PIPELINE AS A SPIKING NEURAL NETWORK
+#
+# Every specialist agent is a NEURON. It only RUNS (spends tokens) when its
+# membrane potential crosses threshold. Agents that aren't needed never reach
+# threshold, so they never fire, so they cost nothing — token savings are a
+# STRUCTURAL property of the substrate, not a heuristic bolted on top.
+#
+# Two layers:
+#   SENSORY (S_*)  — encode features of the incoming task. The orchestrator
+#                    stimulates these with a 0..100 "current" scored from the
+#                    task text (spiking_orchestrator.py: score_task).
+#   SPECIALISTS    — the agents. Driven by sensory spikes and by EACH OTHER
+#                    (the pipeline flow: implement -> review -> log). Each has an
+#                    action CMD_RUN_* the runtime fires when the neuron spikes;
+#                    the orchestrator's handler for that command runs the agent.
+#
+# Because a synapse adds weight*50 to the downstream neuron and every specialist
+# has threshold=50, a single weight>=1.0 input fires a specialist. Raise a
+# threshold to demand COINCIDENCE (two inputs) before an agent runs.
+#
+# Handlers run SYNCHRONOUSLY before propagation (see runtime _fire), so the flow
+# self-sequences: Implementer's agent finishes, THEN its spike drives Reviewer.
+# Result-driven routing (review found issues -> Corrector) is injected by the
+# orchestrator as fresh stimulation, because it depends on an agent's OUTPUT.
+#
+# refractory stops the same agent firing twice in one settle (no correct->review
+# ->correct->... runaway).
+# ─────────────────────────────────────────────────────────────────────────────
+
+refractory=40ms
+
+# ── SENSORY: task features (stimulated 0..100 by the orchestrator) ──
+neuron S_Work      threshold=50 leak=1 type=LIF   # "there is real work to do" — almost always on
+neuron S_Ambiguous threshold=50 leak=1 type=LIF   # task is vague / underspecified
+neuron S_Complex   threshold=50 leak=1 type=LIF   # multi-step / large / risky
+neuron S_Tests     threshold=50 leak=1 type=LIF   # touches or asks for tests
+neuron S_Research  threshold=50 leak=1 type=LIF   # a research codebase (gets a shell, method discipline)
+
+# ── SPECIALISTS: one neuron per agent. threshold 50 = one strong input fires it ──
+neuron Clarifier   threshold=50 leak=2 type=LIF   # ask ONE question, then STOP
+neuron PreRegister threshold=50 leak=2 type=LIF   # state a falsifiable claim before touching files
+neuron Implementer threshold=50 leak=2 type=LIF   # the core: make the change
+neuron TestWriter  threshold=50 leak=2 type=LIF   # add/adjust tests
+neuron Reviewer    threshold=50 leak=2 type=LIF   # independent read-only peer review
+neuron Corrector   threshold=50 leak=2 type=LIF   # fix what review found (driven by review OUTPUT)
+neuron VaultLogger threshold=50 leak=2 type=LIF   # honest ledger entry
+
+# ── ACTIONS: firing a specialist runs its agent (handler in the orchestrator) ──
+action Clarifier   -> [CMD_RUN_CLARIFY]
+action PreRegister -> [CMD_RUN_PREREG]
+action Implementer -> [CMD_RUN_IMPLEMENT]
+action TestWriter  -> [CMD_RUN_TESTS]
+action Reviewer    -> [CMD_RUN_REVIEW]
+action Corrector   -> [CMD_RUN_CORRECT]
+action VaultLogger -> [CMD_RUN_LOG]
+
+# ── FLOW (excitatory synapses; weight*50 added downstream) ──
+# a real task drives the core implementer
+connect S_Work      -> Implementer weight=1.2
+# ambiguity fires the clarifier (which, if it fires, tells the orchestrator to
+# STOP and ask — see the handler)
+connect S_Ambiguous -> Clarifier   weight=1.2
+# ...and ambiguity INHIBITS the implementer (negative weight = a real synaptic
+# veto). You don't implement a task you don't understand: a strong S_Ambiguous
+# spike hyperpolarises Implementer so S_Work's excitation can't push it over
+# threshold. The clarify gate now lives IN THE NETWORK, not only in the
+# orchestrator's control flow -- which is the whole point of "make it go negative".
+connect S_Ambiguous -> Implementer weight=-2.0
+# complex work earns a pre-registration and an always-on review
+connect S_Complex   -> PreRegister weight=1.2
+connect S_Complex   -> Reviewer    weight=0.7
+# test-related work wakes the test writer
+connect S_Tests     -> TestWriter  weight=1.2
+# THE PIPELINE SPINE: implement -> review, and a correction gets re-reviewed
+# once (refractory stops it looping forever). VaultLogger is deliberately NOT
+# wired here: the ledger is written ONCE at the very end of the settle, by the
+# orchestrator, not on every review pass — logging three times because review
+# ran three times is noise, not a record.
+connect Implementer -> Reviewer    weight=1.2
+connect TestWriter  -> Reviewer    weight=0.6
+connect Corrector   -> Reviewer    weight=1.2

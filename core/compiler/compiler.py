@@ -79,7 +79,10 @@ class SpikelingParser:
     # see runtime.ResonatorState — gain falls off at higher frequencies
     # otherwise, see benchmarks/ for why that matters).
     RESONATOR_RE  = re.compile(r"neuron\s+(\w+)\s+type=Resonator\s+freq=([\d.]+)\s+damping=([\d.]+)(?:\s+coupling=([\d.]+))?")
-    CONNECT_RE    = re.compile(r"connect\s+(\w+)\s*->\s*(\w+)\s+weight=([\d.]+)")
+    # weight may be NEGATIVE now: a negative weight is an INHIBITORY synapse --
+    # when src fires it DRAINS the target's membrane potential instead of adding
+    # to it, so one neuron can veto/suppress another (see runtime propagation).
+    CONNECT_RE    = re.compile(r"connect\s+(\w+)\s*->\s*(\w+)\s+weight=(-?[\d.]+)")
     ACTION_RE     = re.compile(r"action\s+(\w+)\s*->\s*\[(\w+)\]")
     REFRACTORY_RE = re.compile(r"refractory=(\d+)ms")
     LEARN_RE      = re.compile(r"learn=(\w+)\s+rate=([\d.]+)")

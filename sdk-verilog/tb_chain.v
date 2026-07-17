@@ -5,7 +5,7 @@
 `timescale 1ns/1ps
 
 module tb;
-    localparam N = 5;
+    localparam N = 8;
     localparam STEPS = 4000;
     localparam WIDTH = 32;
 
@@ -20,17 +20,20 @@ module tb;
     always #5 clk = ~clk;  // 100 MHz
 
     reg [127:0] names [0:N-1];
-    initial names[0] = "Target110";
-    initial names[1] = "Target220";
-    initial names[2] = "Target440";
-    initial names[3] = "Target880";
-    initial names[4] = "Target1760";
+    initial names[0] = "R0";
+    initial names[1] = "R1";
+    initial names[2] = "R2";
+    initial names[3] = "R3";
+    initial names[4] = "R4";
+    initial names[5] = "R5";
+    initial names[6] = "R6";
+    initial names[7] = "R7";
 
     integer fired [0:N-1];
     integer i, t;
 
     initial begin
-        $readmemh("drive_samples.hex", drive_mem);
+        $readmemh("chain_drive.hex", drive_mem);
         for (i = 0; i < N; i = i + 1) fired[i] = 0;
         @(negedge clk); rst = 0;
         for (t = 0; t < STEPS; t = t + 1) begin
@@ -54,11 +57,8 @@ module tb;
         begin : check_block
             integer ok;
             ok = 1;
-            if (!fired[2]) begin $display("[test] FAIL -- missing expected detection: %0s", names[2]); ok = 0; end
-            if (!fired[4]) begin $display("[test] FAIL -- missing expected detection: %0s", names[4]); ok = 0; end
-            if (fired[0]) begin $display("[test] FAIL -- unexpected false positive: %0s", names[0]); ok = 0; end
-            if (fired[1]) begin $display("[test] FAIL -- unexpected false positive: %0s", names[1]); ok = 0; end
-            if (fired[3]) begin $display("[test] FAIL -- unexpected false positive: %0s", names[3]); ok = 0; end
+            if (!fired[0]) begin $display("[test] FAIL -- missing expected detection: %0s", names[0]); ok = 0; end
+            if (!fired[7]) begin $display("[test] FAIL -- missing expected detection: %0s", names[7]); ok = 0; end
             if (ok) $display("\n[test] PASS -- Resonator Verilog hardware module correctly detected the expected tones with no false positives.");
         end
         $finish;

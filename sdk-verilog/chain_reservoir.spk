@@ -1,0 +1,19 @@
+# chain_reservoir.spk
+#
+# 8 Resonator neurons wired as a nearest-neighbor CHAIN (not independent
+# detectors like tone_detector.spk) -- the hardware target for the
+# generation-efficient SSH-dimerized coupling feature in
+# spikeling_resonator_verilog.py's generate_coupled_module(). Same N=8
+# used in tonight's software reservoir tests, for a direct comparison.
+
+neuron R0 type=Resonator freq=220 damping=0.05
+neuron R1 type=Resonator freq=220 damping=0.05
+neuron R2 type=Resonator freq=220 damping=0.05
+neuron R3 type=Resonator freq=220 damping=0.05
+neuron R4 type=Resonator freq=220 damping=0.05
+neuron R5 type=Resonator freq=220 damping=0.05
+neuron R6 type=Resonator freq=220 damping=0.05
+neuron R7 type=Resonator freq=220 damping=0.05
+
+action R0 -> [CHAIN_0]
+action R7 -> [CHAIN_7]
