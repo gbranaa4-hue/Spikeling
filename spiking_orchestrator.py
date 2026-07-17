@@ -40,12 +40,26 @@ import sys
 import time
 import argparse
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "core"))
-from compiler.compiler import SpikelingParser      # noqa: E402
-from runtime.runtime import SpikelingRuntime        # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from pyspike import Net   # noqa: E402
 
+# PORTED TO PYSPIKE (2026-07-17): this used to parse core/examples/agent_brain.spk
+# at every SpikingPipeline() construction. The topology is now built directly
+# via pyspike.Net in _build_brain() below -- same benefits as the scheduler
+# ports (no text round-trip) plus a real simplification: handlers attach
+# straight to their neuron via @net.action() instead of going through the old
+# neuron -> COMMAND STRING -> handler-dict indirection. Verified spike-for-
+# spike identical `fired` sequences (including the Reviewer<->Corrector
+# correction loop and refractory behavior) to the .spk-parsed version across
+# the full demo suite before this replaced it (test_pyspike_orchestrator_parity.py).
+#
+# agent_brain.spk is KEPT in the repo as the human-readable topology
+# reference and as the source for the C code generator / hardware backend --
+# it is NOT read by this file anymore. If you change the topology, update
+# BOTH _build_brain() below and agent_brain.spk, or they will drift; there is
+# no automatic sync between them.
 BRAIN = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                     "core", "examples", "agent_brain.spk")
+                     "core", "examples", "agent_brain.spk")   # kept for reference/C-backend only
 
 # Every real routing decision gets appended here (one JSON object per line).
 # This is the training data for the eventual learned score_task() replacement
@@ -207,11 +221,45 @@ class SpikingPipeline:
         self._corrections = 0
         self._review_gates: list[dict] = []  # every real gate_review() call, for calibration logging
 
-        with open(BRAIN, encoding="utf-8") as f:
-            ast = SpikelingParser().parse(f.read())
-        self.rt = SpikelingRuntime(ast)
-        for neuron, cmd in COMMANDS.items():
-            self.rt.register_handler(cmd, self._make_handler(neuron))
+        self.rt = self._build_brain()
+
+    def _build_brain(self):
+        """Build the exact topology described in agent_brain.spk (see that
+        file's comments for the design rationale), directly via pyspike
+        instead of parsing it as text. Every neuron/weight/leak value here
+        must match agent_brain.spk -- there's no automatic sync, see the
+        module docstring above."""
+        net = Net(refractory_ms=40)
+
+        # sensory layer (stimulated 0..100 by score_task)
+        S_Work      = net.neuron("S_Work",      threshold=50, leak=1)
+        S_Ambiguous = net.neuron("S_Ambiguous", threshold=50, leak=1)
+        S_Complex   = net.neuron("S_Complex",   threshold=50, leak=1)
+        S_Tests     = net.neuron("S_Tests",     threshold=50, leak=1)
+        S_Research  = net.neuron("S_Research",  threshold=50, leak=1)   # currently unwired, same as the .spk
+
+        # specialists -- one neuron per agent
+        specialists = {name: net.neuron(name, threshold=50, leak=2) for name in COMMANDS}
+
+        # flow (mirrors agent_brain.spk's "FLOW" section exactly)
+        S_Work.to(specialists["Implementer"], weight=1.2)
+        S_Ambiguous.to(specialists["Clarifier"], weight=1.2)
+        S_Ambiguous.inhibits(specialists["Implementer"], weight=-2.0)
+        S_Complex.to(specialists["PreRegister"], weight=1.2)
+        S_Complex.to(specialists["Reviewer"], weight=0.7)
+        S_Tests.to(specialists["TestWriter"], weight=1.2)
+        specialists["Implementer"].to(specialists["Reviewer"], weight=1.2)
+        specialists["TestWriter"].to(specialists["Reviewer"], weight=0.6)
+        specialists["Corrector"].to(specialists["Reviewer"], weight=1.2)
+
+        # handlers attach directly to their neuron -- no command-string
+        # indirection needed with pyspike (the old .spk model required a
+        # separate action->COMMAND->handler-dict chain; see COMMANDS below,
+        # kept only for the agents_skipped enumeration, not for dispatch)
+        for name in COMMANDS:
+            net.action(specialists[name])(self._make_handler(name))
+
+        return net.build()
 
     def _make_handler(self, neuron: str):
         def handler():
