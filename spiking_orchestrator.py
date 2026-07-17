@@ -401,13 +401,28 @@ class SpikingPipeline:
         self._specialists = {name: net.neuron(name, threshold=50, leak=2) for name in COMMANDS}
         specialists = self._specialists
 
-        # flow (mirrors agent_brain.spk's "FLOW" section exactly)
-        S_Work.to(specialists["Implementer"], weight=1.2)
-        S_Ambiguous.to(specialists["Clarifier"], weight=1.2)
-        S_Ambiguous.inhibits(specialists["Implementer"], weight=-2.0)
-        S_Complex.to(specialists["PreRegister"], weight=1.2)
+        # flow -- sensory->specialist first-hop weights are now TRAINED
+        # (pyspike_trained_routing.py, surrogate-gradient descent against
+        # the 4 demo cases' independently-verified correct firing patterns),
+        # not hand-picked. Verified: matches the 4 training cases exactly,
+        # and lands close to the original hand-tuned values (same sign,
+        # comparable magnitude) for every edge EXCEPT one, deliberately
+        # NOT adopted -- see the note on S_Complex->Reviewer below.
+        S_Work.to(specialists["Implementer"], weight=1.22)     # was 1.2 (hand-tuned)
+        S_Ambiguous.to(specialists["Clarifier"], weight=1.20)  # was 1.2 (hand-tuned) -- unchanged
+        S_Ambiguous.inhibits(specialists["Implementer"], weight=-1.50)  # was -2.0 (hand-tuned)
+        S_Complex.to(specialists["PreRegister"], weight=1.33)  # was 1.2 (hand-tuned)
+        S_Tests.to(specialists["TestWriter"], weight=1.05)     # was 1.2 (hand-tuned)
+        # S_Complex->Reviewer: training converged to 1.26, ABOVE the ~1.0
+        # solo-fire threshold -- but the training setup only modeled
+        # first-hop weights and never saw Reviewer's OTHER real inputs
+        # (Implementer/TestWriter/Corrector's own synapses into Reviewer,
+        # wired below). Adopting 1.26 would let S_Complex alone fire
+        # Reviewer without any of those, silently turning a coincidence-
+        # reinforcement edge into an independent trigger -- a real design
+        # change the training never actually tested for. Kept at the
+        # original hand-tuned 0.7 deliberately, not from the trained value.
         S_Complex.to(specialists["Reviewer"], weight=0.7)
-        S_Tests.to(specialists["TestWriter"], weight=1.2)
         specialists["Implementer"].to(specialists["Reviewer"], weight=1.2)
         specialists["TestWriter"].to(specialists["Reviewer"], weight=0.6)
         specialists["Corrector"].to(specialists["Reviewer"], weight=1.2)
