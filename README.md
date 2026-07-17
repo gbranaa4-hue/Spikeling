@@ -83,6 +83,28 @@ documented in [`godot-runtime/`](godot-runtime/README.md).)*
 **Not included here:** a separate, unrelated project is kept out of this
 repository via `.gitignore`.
 
+## Agent orchestration as an SNN
+
+An experimental line of work tests whether a spiking neural network can serve
+as the control layer for a multi-agent pipeline — routing tasks, managing
+concurrency, and arbitrating conflicts through spike-based inhibition rather
+than classical scheduling logic.
+
+| File | What it does | What was verified |
+|---|---|---|
+| [`core/examples/agent_brain.spk`](core/examples/agent_brain.spk) | SNN definition for agent-routing and winner-take-all inhibition | Routing and lateral inhibition fire correctly in the Python runtime |
+| [`spiking_orchestrator.py`](spiking_orchestrator.py) | Drives the agent pipeline from spike events | Integrates with the runtime; event dispatch works end-to-end |
+| [`spiking_scheduler.py`](spiking_scheduler.py) | Maps spike activity to agent-slot concurrency scheduling | Mechanism works; falsified as a differentiator — produces identical assignments to classical greedy graph coloring |
+| [`agent_runner.py`](agent_runner.py) | Executes individual agents under scheduler control | Runs agents correctly within the allocated slots |
+| [`benchmark_scheduler.py`](benchmark_scheduler.py) | Compares SNN scheduler against greedy coloring across workloads | Confirms parity; no throughput advantage found |
+| [`test_soft_conflicts.py`](test_soft_conflicts.py) | Tests a ternary consensus gate for soft (probabilistic) conflicts | Shows a small, real accuracy win under high conflict load, at substantial added complexity |
+| [`test_incremental_scheduling.py`](test_incremental_scheduling.py) | Tests online incremental task arrival against classical online coloring | Exact tie — no advantage from the SNN path on incremental arrival |
+
+The honest summary: the SNN routing and inhibition primitives work, but the
+scheduling and arbitration results did not beat well-known classical baselines.
+
+---
+
 ## License
 
 MIT (source code). See [`LICENSE`](LICENSE).

@@ -40,6 +40,8 @@ Thumbs.db
 vault/
 # personal: every command ever typed to the bot
 voice_interaction_log.csv
+# personal: logged agent-pipeline routing decisions (task text + scores)
+task_decisions.jsonl
 # TOTP enrolment QR (encodes the admin secret)
 admin_totp_qr*
 # generated write-and-run scratch scripts
