@@ -339,24 +339,31 @@ class SpikingPipeline:
         a followup stimulation at an ADVANCED clock time, not a static
         synapse -- by the time it fires, Reviewer's refractory has cleared,
         so ref -> Reviewer (a static synapse, like Corrector -> Reviewer)
-        correctly cascades into a real second review."""
-        m = SPAWN_SPECIALIST_RE.search(output or "")
-        if not m:
-            return
-        name, subtask = m.group(1), m.group(2).strip()
-        if name in self._specialists:
-            return   # dedupe -- never spawn the same name twice
-        if len(self._dynamic_specialists) >= MAX_DYNAMIC_SPECIALISTS:
-            return   # explicit growth cap -- see DRIVE_FLOOR lesson in the memory notes
+        correctly cascades into a real second review.
 
-        ref = self._net.neuron(name, threshold=50, leak=2)
-        self._specialists[name] = ref
-        self._specialist_tasks[name] = subtask
-        self._dynamic_specialists.append(name)
+        Scans for ALL requests in the output, not just the first -- a single
+        agent turn can legitimately need more than one (e.g. a task that
+        touches both infra and security). Each is still subject to the
+        per-name dedupe and the total growth cap; if an output lists more
+        requests than the remaining cap allows, the earliest-listed ones win
+        and the rest are silently dropped (capped, not queued -- consistent
+        with "explicit stop condition, no exceptions" everywhere else this
+        mechanism is documented)."""
+        for m in SPAWN_SPECIALIST_RE.finditer(output or ""):
+            name, subtask = m.group(1), m.group(2).strip()
+            if name in self._specialists:
+                continue   # dedupe -- never spawn the same name twice
+            if len(self._dynamic_specialists) >= MAX_DYNAMIC_SPECIALISTS:
+                break      # explicit growth cap -- see DRIVE_FLOOR lesson in the memory notes
 
-        self._net.action(ref)(self._make_handler(name))
-        ref.to(self._specialists["Reviewer"], weight=1.2)
-        self._followups.append((name, 60.0))
+            ref = self._net.neuron(name, threshold=50, leak=2)
+            self._specialists[name] = ref
+            self._specialist_tasks[name] = subtask
+            self._dynamic_specialists.append(name)
+
+            self._net.action(ref)(self._make_handler(name))
+            ref.to(self._specialists["Reviewer"], weight=1.2)
+            self._followups.append((name, 60.0))
 
     def _review_reports_issues(self, review_output: str) -> bool:
         if self.dry_run:
@@ -389,21 +396,52 @@ class SpikingPipeline:
             tools = getattr(vc, "REVIEW_TOOLS", tools)
         return vc.do_claude_code(task=self._agent_task(neuron), tools=tools) or ""
 
+    # Applies to EVERY working specialist -- Reviewer, PreRegister, Corrector,
+    # and any dynamically-spawned specialist can equally discover a genuine
+    # gap, not just Implementer. Excluded: VaultLogger (a summarization pass,
+    # not work -- nothing for it to discover) and Clarifier (a stop-and-ask
+    # gate, not real work either).
+    _SPAWN_HINT = (
+        "\n\nIf, while working, you discover this task genuinely needs a kind "
+        "of specialist not implied above (e.g. a database migration, a "
+        "security review, an API design pass) -- something a rename/"
+        "implement/test/review cycle doesn't cover -- say so explicitly on "
+        "its own line at the end of your output: "
+        "NEEDS_SPECIALIST: <ShortName>: <what it should do>. You may list "
+        "more than one line if genuinely more than one is needed. Only do "
+        "this for genuinely distinct kinds of work, not routine sub-steps of "
+        "what you're already doing."
+    )
+    _NO_SPAWN_HINT = {"VaultLogger", "Clarifier"}
+
     def _agent_task(self, neuron: str) -> str:
         # each specialist gets the task framed for its job
         if neuron in self._specialist_tasks:
             # a dynamically-spawned specialist gets the subtask IT was
-            # requested to do, not the top-level task
-            return self._specialist_tasks[neuron]
+            # requested to do, not the top-level task -- and, up to the
+            # growth cap, can request one of its own the same way
+            base = self._specialist_tasks[neuron]
+            return base if neuron in self._NO_SPAWN_HINT else base + self._SPAWN_HINT
+
         frames = {
             "PreRegister": f"Before any edit, state ONE falsifiable claim about what this change will do: {self.task}",
             "Implementer": self.task,
             "TestWriter":  f"Add or adjust tests for: {self.task}",
             "Reviewer":    f"Peer-review the change for: {self.task}. Read-only. Call out overclaiming.",
             "Corrector":   f"Fix exactly what review flagged for: {self.task}",
-            "VaultLogger": f"Write an honest ledger entry for the work on: {self.task}",
+            "VaultLogger": self._vault_logger_task(),
         }
-        return frames.get(neuron, self.task)
+        base = frames.get(neuron, self.task)
+        return base if neuron in self._NO_SPAWN_HINT else base + self._SPAWN_HINT
+
+    def _vault_logger_task(self) -> str:
+        note = ""
+        if self._dynamic_specialists:
+            note = (f" This run dynamically spawned {len(self._dynamic_specialists)} "
+                    f"unanticipated specialist(s) mid-task: "
+                    f"{', '.join(self._dynamic_specialists)} -- mention what each was "
+                    f"for and whether it turned out to be genuinely needed.")
+        return f"Write an honest ledger entry for the work on: {self.task}.{note}"
 
     def run(self) -> dict:
         # 1. score the task into sensory current

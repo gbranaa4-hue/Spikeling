@@ -80,6 +80,37 @@ def check_4_growth_cap_holds() -> bool:
     return ok
 
 
+def check_5_multi_spawn_one_output() -> bool:
+    # a single agent turn listing TWO genuinely distinct needs -- both
+    # should spawn (cap is 2, so this exactly saturates it); a THIRD in the
+    # same output must be dropped, not queued for later.
+    p = so.SpikingPipeline("rename x to y", dry_run=True)
+    p.rt
+    p._maybe_spawn_specialist(
+        "Implementer",
+        "NEEDS_SPECIALIST: DBMigrator: write the schema migration\n"
+        "NEEDS_SPECIALIST: SecurityReview: check the new auth path\n"
+        "NEEDS_SPECIALIST: Overflow: this one should be dropped by the cap"
+    )
+    ok = (p._dynamic_specialists == ["DBMigrator", "SecurityReview"]
+          and "Overflow" not in p._dynamic_specialists)
+    print(f"  [{'PASS' if ok else 'FAIL'}] 5. multi-spawn from one output "
+          f"(3rd correctly dropped by cap): dynamic_specialists={p._dynamic_specialists}")
+    return ok
+
+
+def check_6_non_implementer_source() -> bool:
+    # the mechanism is wired generically into EVERY handler -- confirm a
+    # spawn triggered by Reviewer (not Implementer) works identically.
+    p = so.SpikingPipeline("rename x to y", dry_run=True)
+    p.rt
+    p._maybe_spawn_specialist("Reviewer", "NEEDS_SPECIALIST: LoadTester: stress-test the endpoint")
+    ok = "LoadTester" in p._dynamic_specialists and "LoadTester" in p._specialists
+    print(f"  [{'PASS' if ok else 'FAIL'}] 6. non-Implementer source (Reviewer) can spawn: "
+          f"dynamic_specialists={p._dynamic_specialists}")
+    return ok
+
+
 def run() -> None:
     print("=" * 74)
     print("  DYNAMIC SPECIALISTS -- wired into the real pipeline")
@@ -89,6 +120,8 @@ def run() -> None:
         check_2_gets_reviewed(),
         check_3_dedupe(),
         check_4_growth_cap_holds(),
+        check_5_multi_spawn_one_output(),
+        check_6_non_implementer_source(),
     ]
     print()
     if all(results):
