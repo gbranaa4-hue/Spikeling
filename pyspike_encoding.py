@@ -18,9 +18,17 @@ two classical schemes.
       at the cost of being pure single-shot instead of continuously
       driving.
 
-Both are verified against their own definitions (not just "runs without
-crashing"): rate coding's empirical firing rate must track the requested
-rate; latency coding's fire time must be monotonically decreasing in value.
+A third public function, drive_neuron_with_spike_train(), feeds a boolean
+spike train into a single fresh LIF neuron tick-by-tick (drive=spike_drive
+on spiking ticks, leak-only on silent ticks) and returns fire_count and
+fire_times -- lets callers confirm that an encoded train produces the
+expected downstream firing without wiring up a full Net.
+
+All three are self-tested against their own definitions (not just "runs
+without crashing"): rate coding's empirical firing rate must track the
+requested rate; latency coding's fire time must be monotonically decreasing
+in value; and the LIF neuron must fire more often under a high-rate
+(value=0.9) train than a low-rate (value=0.1) one.
 
     python pyspike_encoding.py    # self-test
 """
@@ -58,9 +66,9 @@ def latency_spike_time(value: float, n_steps: int) -> int:
 
 def drive_neuron_with_spike_train(threshold: float, leak: float,
                                   spike_train: list, spike_drive: float) -> dict:
-    """Feed a boolean spike train into a fresh LIF neuron, ONE stimulate()
-    per tick (drive=spike_drive on a True tick, drive=0.0 -- just a leak
-    tick -- on a False tick). Returns fire_count and fire_times, so an
+    """Feed a boolean spike train into a fresh LIF neuron, one call per
+    tick: stimulate(drive=spike_drive) on a True tick, rt.tick() -- just a
+    leak step -- on a False tick. Returns fire_count and fire_times, so an
     encoding scheme's actual effect on a real neuron can be measured, not
     just the train itself."""
     rt = SpikelingRuntime.__new__(SpikelingRuntime)

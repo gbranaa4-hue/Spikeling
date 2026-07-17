@@ -11,12 +11,17 @@ a network respond to WHEN inputs arrived relative to each other, not just
 whether they did.
 
 Built as a wrapper (like CausalNet), not a core runtime.py change: a
-DelayedNet holds a queue of (delivery_tick, dst_name, weight) events and
-applies them when their tick arrives, instead of propagating a fired
-neuron's synapses immediately.
+DelayedNet holds a min-heap of (delivery_time, seq, dst, weight) events
+(seq is a tie-breaking counter for heap stability) and applies them when
+their time arrives, instead of propagating a fired neuron's synapses
+immediately.
 
     python pyspike_delay.py    # self-test: delayed delivery + coincidence
                                  # detection that ONLY works because of delay
+
+Use .advance_to(t) to move absolute time forward and flush any queued
+deliveries whose deadline has arrived; use .stimulate(name, drive) for
+ordinary input (it also auto-advances now by 1.0 per call).
 """
 import heapq
 import os
@@ -30,9 +35,10 @@ class DelayedNet:
     """Wraps a live pyspike Net. connect_delayed(src, dst, weight, delay)
     registers a delayed synapse SEPARATELY from the network's own
     (instantaneous) synapses -- delayed effects are queued and only
-    delivered when tick() advances far enough. Use .tick(dt) to advance
-    time and flush any deliveries that are now due; use .stimulate() for
-    ordinary instantaneous input, same as the underlying runtime."""
+    delivered when advance_to() moves time far enough. Use .advance_to(t)
+    to advance absolute time and flush any deliveries now due; use
+    .stimulate() for ordinary instantaneous input (auto-advances now by 1.0
+    per call), same as the underlying runtime."""
 
     def __init__(self, net: Net, rt) -> None:
         self.net = net
