@@ -20,6 +20,13 @@ Uses the Spikeling LIF runtime + the negative-weight (inhibitory) synapses added
 to the DSL. Nothing here is bespoke scheduling logic -- the mutual inhibition IS
 the schedule; the Python just reads off which neurons fired.
 
+PORTED TO PYSPIKE (2026-07-17): this used to build the network by f-string-
+formatting .spk TEXT and re-parsing it with SpikelingParser -- EVERY wave.
+Now it builds the same network directly via pyspike.Net -- a plain double
+loop instead of string generation + regex parsing. Verified byte-identical
+scheduling behavior against the old text-based version on the same conflict
+graphs (see test_pyspike_scheduler_parity.py) before this replaced it.
+
     python spiking_scheduler.py            # demo on a real session's conflict graph
 """
 
@@ -28,9 +35,8 @@ import sys
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "core"))
-from compiler.compiler import SpikelingParser      # noqa: E402
-from runtime.runtime import SpikelingRuntime        # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from pyspike import Net                             # noqa: E402
 
 # tuned so an inhibited agent stays suppressed for a whole wave regardless of how
 # many agents are stimulated: firing drains a conflict to -threshold (-50); a
@@ -54,16 +60,18 @@ def _overlaps(a: AgentSpec, b: AgentSpec) -> bool:
     return not a.files.isdisjoint(b.files)
 
 
-def _build_network_text(agents: list) -> str:
+def _build_network(agents: list):
     """One neuron per agent + mutual inhibitory synapses between every overlapping
-    pair. This generated .spk IS the conflict graph."""
-    lines = [f"neuron {a.name} threshold={THRESH} leak={LEAK} type=LIF" for a in agents]
+    pair -- this network IS the conflict graph. A plain double loop over real
+    AgentSpec objects, no text generation, no re-parsing."""
+    net = Net()
+    refs = {a.name: net.neuron(a.name, threshold=THRESH, leak=LEAK) for a in agents}
     for i, a in enumerate(agents):
         for b in agents[i + 1:]:
             if _overlaps(a, b):
-                lines.append(f"connect {a.name} -> {b.name} weight={INHIBIT_WEIGHT}")
-                lines.append(f"connect {b.name} -> {a.name} weight={INHIBIT_WEIGHT}")
-    return "\n".join(lines)
+                refs[a.name].inhibits(refs[b.name], weight=INHIBIT_WEIGHT)
+                refs[b.name].inhibits(refs[a.name], weight=INHIBIT_WEIGHT)
+    return net.build()
 
 
 def schedule(agents: list) -> list:
@@ -75,7 +83,7 @@ def schedule(agents: list) -> list:
     waves = []
     t = 0.0
     while pending:
-        rt = SpikelingRuntime(SpikelingParser().parse(_build_network_text(pending)))
+        rt = _build_network(pending)
         wave = []
         # stimulate in priority order: a higher-priority agent fires first and
         # inhibits its conflicts, so a conflicting lower-priority agent, when
