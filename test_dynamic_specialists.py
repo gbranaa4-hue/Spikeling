@@ -22,6 +22,7 @@ Four checks, each with an explicit prediction:
 """
 import os
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import spiking_orchestrator as so   # noqa: E402
@@ -157,17 +158,31 @@ def run() -> None:
     print("=" * 74)
     print("  DYNAMIC SPECIALISTS -- wired into the real pipeline")
     print("=" * 74)
-    results = [
-        check_1_spawn_happens(),
-        check_2_gets_reviewed(),
-        check_3_dedupe(),
-        check_4_growth_cap_holds(),
-        check_5_multi_spawn_one_output(),
-        check_6_non_implementer_source(),
-        check_7_tool_tier_selection(),
-        check_8_framing_unchanged_when_nothing_spawned(),
-        check_9_framing_mentions_spawn_when_present(),
-    ]
+    # ISOLATION: check_1/2/9 call p.run() with spawn_request set, which fires
+    # VaultLogger, which now calls _record_specialist_outcomes() -- without
+    # this, those checks silently write synthetic names (DBMigrator,
+    # LoadTester, ...) into the REAL specialist_history.json (found: exactly
+    # this happened before this isolation was added). Same discipline as
+    # test_structural_learning.py.
+    original_path = so.SPECIALIST_HISTORY
+    fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="test_specialist_history_")
+    os.close(fd)
+    os.remove(tmp_path)
+    so.SPECIALIST_HISTORY = tmp_path
+    try:
+        results = [
+            check_1_spawn_happens(),
+            check_2_gets_reviewed(),
+            check_3_dedupe(),
+            check_4_growth_cap_holds(),
+            check_5_multi_spawn_one_output(),
+            check_6_non_implementer_source(),
+            check_7_tool_tier_selection(),
+            check_8_framing_unchanged_when_nothing_spawned(),
+            check_9_framing_mentions_spawn_when_present(),
+        ]
+    finally:
+        so.SPECIALIST_HISTORY = original_path
     print()
     if all(results):
         print(f"  ALL {len(results)} CHECKS PASS: a specialist can spawn an unanticipated "

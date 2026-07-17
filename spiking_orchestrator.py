@@ -256,11 +256,78 @@ def tool_tier_for_subtask(subtask: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# STRUCTURAL LEARNING -- the fixed roster is no longer permanently fixed.
+#
+# Everything above operates WITHIN a single run: the network is built fresh
+# every time, does its thing, and is thrown away. Nothing persists. This
+# closes that gap: a dynamically-spawned specialist with a consistent track
+# record of being genuinely useful gets PROMOTED into the static topology --
+# future SpikingPipeline instances build it in from construction, no longer
+# needing to be rediscovered live each time. The base architecture itself
+# evolves across runs, driven by real accumulated evidence.
+#
+# Evidence comes from VaultLogger's own ledger entry: when a run spawned any
+# specialists, its framing (_vault_logger_task) asks it to state, per name,
+# VERDICT: <Name>: useful|unnecessary. Promotion requires a track record of
+# at least PROMOTION_THRESHOLD "useful" verdicts and ZERO "unnecessary"
+# verdicts, ever -- strict and one-sided on purpose, same "explicit stop
+# condition, no exceptions" discipline as MAX_DYNAMIC_SPECIALISTS: better to
+# under-promote than to bake a flaky specialist permanently into every future
+# run's topology.
+#
+# KNOWN GAP, found while testing this (test_structural_learning.py): there is
+# NO DEMOTION PATH. Once a name is promoted, it's part of the fixed roster
+# built in _build_brain() -- a later NEEDS_SPECIALIST request for that same
+# name is correctly deduped against the existing neuron (see
+# _maybe_spawn_specialist's dedupe check), which means it never becomes a
+# "dynamically-spawned" specialist again and _record_specialist_outcomes()
+# has nothing to attach a future bad verdict to. A promoted specialist that
+# later turns out to be a mistake currently stays promoted forever (fixable
+# by hand: edit specialist_history.json directly). Not fixed here -- flagged
+# honestly rather than silently left as an assumed-solved edge case.
+# ─────────────────────────────────────────────────────────────────────────────
+SPECIALIST_HISTORY = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  "specialist_history.json")
+PROMOTION_THRESHOLD = 3
+VERDICT_RE = re.compile(r"VERDICT:\s*(\w+):\s*(useful|unnecessary)", re.I)
+
+
+def load_specialist_history() -> dict:
+    try:
+        with open(SPECIALIST_HISTORY, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_specialist_history(history: dict) -> None:
+    """Append-and-persist, fails soft -- a disk hiccup here must never break
+    the pipeline, same discipline as DECISIONS_LOG."""
+    try:
+        with open(SPECIALIST_HISTORY, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2, sort_keys=True)
+    except OSError:
+        pass
+
+
+def promoted_specialists(history: dict = None) -> list:
+    """Names with a strictly positive track record: >=PROMOTION_THRESHOLD
+    'useful' verdicts and zero 'unnecessary' ones, ever."""
+    history = load_specialist_history() if history is None else history
+    return sorted(
+        name for name, rec in history.items()
+        if rec.get("judged_useful", 0) >= PROMOTION_THRESHOLD
+        and rec.get("unnecessary", 0) == 0
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # THE PIPELINE
 # ─────────────────────────────────────────────────────────────────────────────
 class SpikingPipeline:
     def __init__(self, task: str, project: str = "spikeling", dry_run: bool = True,
-                 review_finds_issues: bool = False, spawn_request: tuple = None):
+                 review_finds_issues: bool = False, spawn_request: tuple = None,
+                 verdicts: dict = None):
         self.task = task
         self.project = project
         self.dry_run = dry_run
@@ -269,6 +336,10 @@ class SpikingPipeline:
         # in dry_run mode, source_neuron's output includes the NEEDS_SPECIALIST marker
         # so the spawn mechanism is exercisable without a real agent call.
         self.spawn_request = spawn_request
+        # demo/test knob for structural learning: {name: "useful"|"unnecessary"} --
+        # in dry_run mode, VaultLogger's output includes matching VERDICT lines
+        # so promotion is exercisable without a real agent call.
+        self.verdicts = verdicts or {}
         self.fired: list[str] = []          # order agents actually ran
         self.outputs: dict[str, str] = {}
         self._clock = 0.0                    # sim ms; advances per agent so re-fires clear refractory
@@ -326,6 +397,21 @@ class SpikingPipeline:
         for name in COMMANDS:
             net.action(specialists[name])(self._make_handler(name))
 
+        # PROMOTED SPECIALISTS (see STRUCTURAL LEARNING section above): a
+        # name with a consistent real track record of being genuinely useful
+        # is built into the topology from here on, driven by S_Complex (the
+        # same "extra work is needed" signal PreRegister/Reviewer use) --
+        # no live spawn required, it's just part of the roster now.
+        for name in promoted_specialists():
+            if name in specialists:
+                continue   # already a fixed name somehow -- never double-wire
+            ref = net.neuron(name, threshold=50, leak=2)
+            specialists[name] = ref
+            S_Complex.to(ref, weight=1.2)
+            ref.to(specialists["Reviewer"], weight=1.2)
+            net.action(ref)(self._make_handler(name))
+
+        self._base_specialist_names = set(specialists)   # fixed + promoted, BEFORE any live spawn
         return rt
 
     def _make_handler(self, neuron: str):
@@ -334,12 +420,44 @@ class SpikingPipeline:
             out = self._run_agent(neuron)
             self.outputs[neuron] = out
             self._maybe_spawn_specialist(neuron, out)
+            if neuron == "VaultLogger":
+                self._record_specialist_outcomes(out)
             # RESULT-DRIVEN ROUTING: review is the gate. Only a review that
             # reports issues wakes the Corrector, and only a couple of times.
             if neuron == "Reviewer" and self._review_reports_issues(out) and self._corrections < 2:
                 self._corrections += 1
                 self._followups.append(("Corrector", 60.0))
         return handler
+
+    def _record_specialist_outcomes(self, vault_output: str) -> None:
+        """Parse VaultLogger's VERDICT: <Name>: useful|unnecessary lines and
+        update the persisted specialist_history.json -- this is the ONLY
+        write path for that file, and it's how a dynamically-spawned
+        specialist accumulates the track record that can eventually promote
+        it into the fixed roster (see STRUCTURAL LEARNING section). A
+        spawned specialist this run with NO verdict given (ambiguous output)
+        counts as neither useful nor unnecessary -- it's evidence-neutral,
+        not silently treated as a negative.
+
+        Isolation note for tests: this always writes to whatever
+        SPECIALIST_HISTORY currently points at -- ordinary dry-run usage
+        (demo(), the parity tests) never spawns anything (no spawn_request
+        given), so it never reaches this far and never touches the file.
+        Tests that DO exercise this path should monkeypatch the module-level
+        SPECIALIST_HISTORY to a temp path first, not rely on dry_run alone."""
+        if not self._dynamic_specialists:
+            return
+        verdicts = {name.lower(): v.lower() for name, v in VERDICT_RE.findall(vault_output or "")}
+        history = load_specialist_history()
+        for name in self._dynamic_specialists:
+            rec = history.setdefault(name, {"spawned": 0, "judged_useful": 0, "unnecessary": 0})
+            rec["spawned"] += 1
+            verdict = verdicts.get(name.lower())
+            if verdict == "useful":
+                rec["judged_useful"] += 1
+            elif verdict == "unnecessary":
+                rec["unnecessary"] += 1
+        save_specialist_history(history)
 
     def _maybe_spawn_specialist(self, source_neuron: str, output: str) -> None:
         """If `output` asks for a specialist that doesn't exist yet, spawn one
@@ -407,6 +525,9 @@ class SpikingPipeline:
             if self.spawn_request and self.spawn_request[0] == neuron:
                 _, name, subtask = self.spawn_request
                 out += f"\nNEEDS_SPECIALIST: {name}: {subtask}"
+            if neuron == "VaultLogger" and self.verdicts:
+                for name, verdict in self.verdicts.items():
+                    out += f"\nVERDICT: {name}: {verdict}"
             return out
         return self._run_real_agent(neuron)
 
@@ -519,7 +640,7 @@ class SpikingPipeline:
             result = {
                 "scores": scores, "fired": self.fired, "agents_run": len(self.fired),
                 "clarified": True,
-                "agents_skipped": [n for n in COMMANDS if n not in self.fired],
+                "agents_skipped": [n for n in self._base_specialist_names if n not in self.fired],
             }
             self._log_decision(result)
             return result

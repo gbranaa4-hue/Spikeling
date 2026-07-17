@@ -42,6 +42,8 @@ vault/
 voice_interaction_log.csv
 # personal: logged agent-pipeline routing decisions (task text + scores)
 task_decisions.jsonl
+# personal: accumulated specialist promotion track record (grows with real usage)
+specialist_history.json
 # TOTP enrolment QR (encodes the admin secret)
 admin_totp_qr*
 # generated write-and-run scratch scripts
