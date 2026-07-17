@@ -52,7 +52,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "core"))
 from compiler.compiler import SpikelingAST, NeuronDef, ConnectionDef, ActionDef  # noqa: E402
-from runtime.runtime import SpikelingRuntime                                     # noqa: E402
+from runtime.runtime import SpikelingRuntime, NeuronState, Synapse               # noqa: E402
 
 
 class NeuronRef:
@@ -97,6 +97,7 @@ class Net:
         self._names: set = set()
         self._handlers: dict = {}
         self._action_counter = 0
+        self._live_rt: SpikelingRuntime = None   # set by build_live(); see its docstring
 
     def neuron(self, name: str, threshold: int = 50, leak: int = 0,
               type: str = "LIF", freq_hz: float = None, damping: float = None,
@@ -108,12 +109,19 @@ class Net:
             name=name, threshold=int(threshold), leak=int(leak),
             neuron_type=type, freq_hz=freq_hz, damping=damping, coupling=coupling,
         ))
+        if self._live_rt is not None:
+            # LIVE mode: this neuron must exist in the runtime immediately,
+            # not just in the AST -- see build_live()'s docstring for why.
+            self._live_rt.neurons[name] = NeuronState(
+                name=name, threshold=float(threshold), leak=float(leak))
         return NeuronRef(self, name)
 
     def connect(self, src, dst, weight: float = 1.0) -> None:
         src_name = src.name if isinstance(src, NeuronRef) else src
         dst_name = dst.name if isinstance(dst, NeuronRef) else dst
         self.ast.connections.append(ConnectionDef(src=src_name, dst=dst_name, weight=float(weight)))
+        if self._live_rt is not None:
+            self._live_rt.synapses.append(Synapse(src=src_name, dst=dst_name, weight=float(weight)))
 
     def action(self, neuron: NeuronRef):
         """Decorator: attach a real Python function directly to a neuron's
@@ -138,6 +146,51 @@ class Net:
         for cmd, fn in self._handlers.items():
             rt.register_handler(cmd, fn)
         return rt
+
+    def build_live(self) -> SpikelingRuntime:
+        """Like build(), but returns a runtime you can keep GROWING after the
+        fact: every .neuron()/.connect() call made on this Net AFTER calling
+        build_live() also mutates the returned runtime immediately, in place
+        -- no reparse, no rebuild, no batch step. This is for genuinely
+        incremental/streaming use (agents/neurons arriving over time), as
+        opposed to build()'s batch model (define the whole network, then run
+        it once).
+
+        IMPORTANT -- inhibition in this runtime is EVENT-DRIVEN (a synapse's
+        effect is only applied the instant its source neuron FIRES, in
+        runtime.py's _fire() propagation loop). So a synapse you .connect()
+        AFTER its source already fired will NOT retroactively apply that past
+        firing -- the event already happened, propagation doesn't replay. If
+        your use case needs a late-arriving inhibitory edge to a neuron that
+        may have already fired to still take effect, call
+        reconcile_late_edge() right after connecting it (see its docstring).
+        This isn't a pyspike limitation to work around -- it's what
+        'incremental' has to mean for an event-driven substrate, and it's
+        pyspike's job to make that reconciliation easy to do correctly, not
+        to hide that it's needed."""
+        self._live_rt = SpikelingRuntime.__new__(SpikelingRuntime)
+        self._live_rt.neurons = {}
+        self._live_rt.resonators = {}
+        self._live_rt.synapses = []
+        self._live_rt.actions = {}
+        self._live_rt.refractory_ms = float(self.ast.refractory_ms)
+        self._live_rt.learner = None
+        self._live_rt.handlers = dict(self._handlers)
+        self._live_rt._spike_log = []
+        return self._live_rt
+
+    def reconcile_late_edge(self, src: NeuronRef, dst: NeuronRef, weight: float) -> None:
+        """After connecting src -> dst on a build_live() runtime, call this to
+        apply src's ALREADY-PAST firing to dst, if src already fired before
+        this edge existed. Mirrors exactly what _fire()'s own propagation
+        step does for edges that existed at firing time -- see build_live()'s
+        docstring for why this can't happen automatically."""
+        if self._live_rt is None:
+            raise RuntimeError("reconcile_late_edge() requires build_live() first")
+        src_n = self._live_rt.neurons[src.name]
+        dst_n = self._live_rt.neurons[dst.name]
+        if src_n.fire_count > 0:
+            dst_n.membrane_potential = max(-dst_n.threshold, dst_n.membrane_potential + weight * 50.0)
 
     def _validate(self) -> None:
         names = self._names
@@ -232,10 +285,46 @@ def _benchmark_vs_string_roundtrip(n_agents: int = 30, n_trials: int = 200) -> N
           f"(this is build cost only, not stimulate/spike-propagation cost)")
 
 
+def _selftest_live_incremental() -> None:
+    """Prove build_live() + reconcile_late_edge() behaves correctly: a late
+    inhibitory edge to an ALREADY-FIRED neighbor must still veto the
+    newcomer, and the raw-NeuronState/Synapse equivalent (what
+    test_incremental_scheduling.py did by hand before this existed) must
+    match it exactly."""
+    net = Net()
+    rt = net.build_live()                         # empty live runtime, grows from here
+    A = net.neuron("A", threshold=50, leak=0)
+    rt.stimulate("A", 1.0, 60.0)
+    assert rt.neurons["A"].fire_count == 1, "A should have fired before B ever existed"
+
+    B = net.neuron("B", threshold=50, leak=0)   # arrives AFTER A already fired
+    A.inhibits(B, weight=-3.0)                   # late edge -- A's firing is in the past
+    net.reconcile_late_edge(A, B, weight=-3.0)    # must be applied manually
+    rt.stimulate("B", 2.0, 60.0)
+    assert rt.neurons["B"].fire_count == 0, (
+        "B should have been vetoed by A's past firing after reconciliation")
+
+    # control: WITHOUT reconcile_late_edge, B should fire (proves the
+    # reconciliation call is doing real work, not a no-op)
+    net2 = Net()
+    rt2 = net2.build_live()
+    A2 = net2.neuron("A", threshold=50, leak=0)
+    rt2.stimulate("A", 1.0, 60.0)
+    B2 = net2.neuron("B", threshold=50, leak=0)
+    A2.inhibits(B2, weight=-3.0)
+    rt2.stimulate("B", 2.0, 60.0)
+    assert rt2.neurons["B"].fire_count == 1, (
+        "control failed: B should fire when the late edge is NOT reconciled")
+
+    print("  [PASS] build_live() + reconcile_late_edge() correctly vetoes a late "
+          "arrival against an already-fired neighbor (and the un-reconciled control fires)")
+
+
 if __name__ == "__main__":
     print("=" * 78)
     print("  PYSPIKE SELF-TEST")
     print("=" * 78)
     _selftest_matches_spk_text()
+    _selftest_live_incremental()
     print()
     _benchmark_vs_string_roundtrip()

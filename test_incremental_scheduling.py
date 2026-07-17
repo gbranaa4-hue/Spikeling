@@ -45,7 +45,16 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "core"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from runtime.runtime import SpikelingRuntime, NeuronState, Synapse   # noqa: E402
+from pyspike import Net                            # noqa: E402
+
+# PORTED TO PYSPIKE (2026-07-17): this used to hand-construct raw NeuronState/
+# Synapse objects on a bare runtime (there was no text round-trip to remove --
+# this script already needed true incremental construction, which pyspike's
+# batch build() didn't support). Building this port is what pushed pyspike to
+# grow build_live() + reconcile_late_edge() -- a real new capability, not a
+# cosmetic rewrite. Verified identical wave counts/ops/violations to the old
+# raw-construction version across the same 4 sizes x 200 trials
+# (test_pyspike_incremental_parity.py) before this replaced it.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -132,50 +141,30 @@ THRESH = 50.0
 LEAK = 0.0
 
 
-def _bare_runtime() -> SpikelingRuntime:
-    """Construct a SpikelingRuntime without going through the DSL parser --
-    neurons/synapses are plain Python containers, so they can be mutated
-    incrementally exactly like any other in-memory data structure."""
-    rt = SpikelingRuntime.__new__(SpikelingRuntime)
-    rt.neurons = {}
-    rt.resonators = {}
-    rt.synapses = []
-    rt.actions = {}
-    rt.refractory_ms = 0.0
-    rt.learner = None
-    rt.handlers = {}
-    rt._spike_log = []
-    return rt
-
-
-def _admit_one(rt: SpikelingRuntime, newcomer: dict, seen: list, t: float) -> tuple:
-    """Add one agent's neuron + conflict synapses to a LIVE runtime and decide
-    admission. Because this runtime's inhibition is EVENT-DRIVEN (applied only
-    at the instant the source neuron fires -- see runtime.py _fire), a synapse
-    created AFTER its source already fired would otherwise never deliver that
-    neighbor's veto: the firing event is in the past, the synapse didn't exist
-    yet, propagation doesn't replay. So any already-fired conflicting neighbor
-    must have its inhibitory effect applied to the newcomer MANUALLY, right
-    now, mirroring exactly what _fire()'s propagation step already does for
-    synapses that existed at firing time. This is not a workaround bolted on
-    top of the substrate -- it's what 'incremental' has to mean for an
-    event-driven network: a late-arriving edge must reconcile against
-    already-realized events, the same way a newly-placed lock must check
-    already-held locks rather than assume it'll be notified retroactively."""
+def _admit_one(net: Net, rt, newcomer: dict, seen: list, refs: dict, t: float) -> tuple:
+    """Add one agent's neuron + conflict synapses to a LIVE (build_live())
+    pyspike runtime and decide admission. Because this runtime's inhibition
+    is EVENT-DRIVEN (applied only at the instant the source neuron fires --
+    see runtime.py _fire), a synapse created AFTER its source already fired
+    would otherwise never deliver that neighbor's veto: the firing event is
+    in the past, the synapse didn't exist yet, propagation doesn't replay. So
+    any already-fired conflicting neighbor must have its inhibitory effect
+    applied to the newcomer via net.reconcile_late_edge(), mirroring exactly
+    what _fire()'s propagation step already does for synapses that existed at
+    firing time. This is not a workaround bolted on top of the substrate --
+    it's what 'incremental' has to mean for an event-driven network: a
+    late-arriving edge must reconcile against already-realized events, the
+    same way a newly-placed lock must check already-held locks rather than
+    assume it'll be notified retroactively."""
     ops = 0
-    rt.neurons[newcomer["name"]] = NeuronState(
-        name=newcomer["name"], threshold=THRESH, leak=LEAK)
-    downstream = rt.neurons[newcomer["name"]]
+    newcomer_ref = net.neuron(newcomer["name"], threshold=THRESH, leak=LEAK)
+    refs[newcomer["name"]] = newcomer_ref
     for prior in seen:
         ops += 1
         if conflicts(newcomer, prior):
-            rt.synapses.append(Synapse(newcomer["name"], prior["name"], INHIBIT_WEIGHT))
-            rt.synapses.append(Synapse(prior["name"], newcomer["name"], INHIBIT_WEIGHT))
-            if rt.neurons[prior["name"]].fire_count > 0:
-                # reconcile against an event already in the past
-                downstream.membrane_potential = max(
-                    -downstream.threshold,
-                    downstream.membrane_potential + INHIBIT_WEIGHT * 50.0)
+            newcomer_ref.inhibits(refs[prior["name"]], weight=INHIBIT_WEIGHT)
+            refs[prior["name"]].inhibits(newcomer_ref, weight=INHIBIT_WEIGHT)
+            net.reconcile_late_edge(refs[prior["name"]], newcomer_ref, weight=INHIBIT_WEIGHT)
     seen.append(newcomer)
     rt.stimulate(newcomer["name"], t, DRIVE)
     ops += 1
@@ -184,14 +173,16 @@ def _admit_one(rt: SpikelingRuntime, newcomer: dict, seen: list, t: float) -> tu
 
 
 def schedule_incremental_spiking(stream: list) -> tuple:
-    rt = _bare_runtime()
+    net = Net()
+    rt = net.build_live()
     seen = []
+    refs = {}
     ops = 0
     wave = []
     t = 0.0
     for newcomer in stream:
         t += 1.0
-        fired, o = _admit_one(rt, newcomer, seen, t)
+        fired, o = _admit_one(net, rt, newcomer, seen, refs, t)
         ops += o
         if fired:
             wave.append(newcomer["name"])
@@ -202,12 +193,14 @@ def schedule_incremental_spiking(stream: list) -> tuple:
     # replaying the SAME arrival order (a fresh live runtime per wave --
     # membrane state from a finished wave has no reason to carry over)
     while pending:
-        rt = _bare_runtime()
+        net = Net()
+        rt = net.build_live()
         seen = []
+        refs = {}
         wave = []
         for newcomer in pending:
             t += 1.0
-            fired, o = _admit_one(rt, newcomer, seen, t)
+            fired, o = _admit_one(net, rt, newcomer, seen, refs, t)
             ops += o
             if fired:
                 wave.append(newcomer["name"])
