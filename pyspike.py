@@ -128,12 +128,23 @@ class Net:
         firing event. No command-string indirection to manage by hand -- an
         internal command id is generated and wired to the handler for you,
         collapsing the .spk model's three-step (neuron -> command string ->
-        handler dict) into one decorator."""
+        handler dict) into one decorator.
+
+        BUG FOUND AND FIXED (2026-07-17): in build_live() mode this used to
+        only update the AST + self._handlers, never the live runtime's own
+        .actions/.handlers dicts -- so an action attached after build_live()
+        (the normal order: build the empty live runtime, THEN grow it) never
+        actually fired, silently. .neuron()/.connect() already mutated the
+        live runtime immediately; .action() has to do the same for the same
+        reason -- there is no batch step in live mode to pick this up later."""
         def decorator(fn):
             self._action_counter += 1
             cmd = f"__pyspike_cmd_{self._action_counter}_{neuron.name}__"
             self.ast.actions.append(ActionDef(neuron=neuron.name, command=cmd))
             self._handlers[cmd] = fn
+            if self._live_rt is not None:
+                self._live_rt.actions[neuron.name] = cmd
+                self._live_rt.handlers[cmd] = fn
             return fn
         return decorator
 
@@ -320,11 +331,48 @@ def _selftest_live_incremental() -> None:
           "arrival against an already-fired neighbor (and the un-reconciled control fires)")
 
 
+def _selftest_live_actions() -> None:
+    """Prove @net.action() actually fires in build_live() mode -- found broken
+    while building the self-growing-network experiment: action() only ever
+    updated the AST + self._handlers, never the live runtime's own
+    .actions/.handlers dicts, so an action attached in the normal live-mode
+    order (build_live() first, then grow) silently never fired. This also
+    proves a handler can spawn a new neuron+synapse that fires in the SAME
+    cascade (handlers run synchronously before propagation -- see runtime.py
+    _fire()), which is the mechanism the self-growing-network experiment
+    depends on."""
+    net = Net()
+    rt = net.build_live()
+    events = []
+
+    seed = net.neuron("seed", threshold=50, leak=0)
+
+    @net.action(seed)
+    def _on_seed():
+        events.append("seed")
+        child = net.neuron("child", threshold=50, leak=0)
+        seed.to(child, weight=1.2)   # 1.2*50=60 >= threshold=50
+
+        @net.action(child)
+        def _on_child():
+            events.append("child")
+
+    rt.stimulate("seed", 1.0, 60.0)
+    assert events == ["seed", "child"], f"expected cascade [seed, child], got {events}"
+    assert rt.neurons["child"].fire_count == 1, "child should have fired in the same cascade"
+    print("  [PASS] @net.action() fires correctly in build_live() mode, INCLUDING a handler-"
+          "spawned child neuron that fires in the same cascade (one stimulate() call)")
+
+    print("  [PASS] build_live() + reconcile_late_edge() correctly vetoes a late "
+          "arrival against an already-fired neighbor (and the un-reconciled control fires)")
+
+
 if __name__ == "__main__":
     print("=" * 78)
     print("  PYSPIKE SELF-TEST")
     print("=" * 78)
     _selftest_matches_spk_text()
     _selftest_live_incremental()
+    _selftest_live_actions()
     print()
     _benchmark_vs_string_roundtrip()
