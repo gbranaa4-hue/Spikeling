@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# Reviewed 2026-07-17
 """
 pyspike_delay.py — synaptic transmission delay. Every Synapse in this
 project's core runtime has src/dst/weight only -- propagation is

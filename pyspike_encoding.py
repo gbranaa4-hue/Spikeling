@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# Reviewed 2026-07-17
 """
 pyspike_encoding.py — spike-train encoding: turning a real-valued input into
 an actual sequence of spikes, instead of injecting a scalar "drive" directly

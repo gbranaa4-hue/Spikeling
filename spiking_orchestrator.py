@@ -459,6 +459,8 @@ class SpikingPipeline:
             self._maybe_spawn_specialist(neuron, out)
             if neuron == "VaultLogger":
                 self._record_specialist_outcomes(out)
+                if not self.dry_run:
+                    self._log_to_obsidian_vault(out)
             # RESULT-DRIVEN ROUTING: review is the gate. Only a review that
             # reports issues wakes the Corrector, and only a couple of times.
             if neuron == "Reviewer" and self._review_reports_issues(out) and self._corrections < 2:
@@ -470,6 +472,31 @@ class SpikingPipeline:
                 # can silently fail to clear Reviewer's refractory on re-review).
                 self._followups.append(("Corrector", 60.0, "Reviewer"))
         return handler
+
+    def _log_to_obsidian_vault(self, vault_output: str) -> None:
+        """VaultLogger's entire PURPOSE is to write a real ledger entry into
+        the Obsidian vault (vault/Project Work) -- but until now nothing
+        actually called voice_commands.log_to_vault() to do that. The one
+        entry that existed there (the task_decisions_dashboard.py run) only
+        exists because the underlying Claude Code agent happened to choose
+        to write it itself, not because this was wired in. That's the same
+        "hope the LLM remembers" pattern this project has repeatedly found
+        and fixed elsewhere today (e.g. tool_tier_for_subtask() instead of
+        hoping a spawned specialist picks safe tools). Fixed the same way:
+        a deterministic Python call, not a hope.
+
+        Real-mode only (dry_run is checked by the caller) -- vault writes
+        would be meaningless/noisy for synthetic demo runs. Fails soft,
+        matching log_to_vault()'s own discipline: vault logging must never
+        break the actual pipeline."""
+        try:
+            import voice_commands as vc
+            notes_dir = os.path.join(vc.VAULT_DIR, "Project Work")
+            task_label = f"[spiking_pipeline:{self.project}] {self.task}"
+            vc.log_to_vault("agent_task", task_label, output=vault_output,
+                            status="done_via_spiking_pipeline", notes_dir=notes_dir)
+        except Exception as e:
+            print(f"vault logging failed (non-fatal): {e}", flush=True)
 
     def _record_specialist_outcomes(self, vault_output: str) -> None:
         """Parse VaultLogger's VERDICT: <Name>: useful|unnecessary lines and
