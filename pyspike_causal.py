@@ -45,36 +45,78 @@ class CausalNet:
     of a caller-managed shared clock. `stimulate(name, drive)` takes no time
     argument at all -- there IS no global now to pass in."""
 
-    def __init__(self, net: Net, rt) -> None:
+    def __init__(self, net: Net, rt, tick_size: float = 1.0) -> None:
         self.net = net
         self.rt = rt
-        self._local_tick: dict = {name: 0 for name in rt.neurons}
+        # TICK_SIZE, not always 1: a network's refractory_ms is tuned
+        # against whatever unit its stimulate() calls advance time by. The
+        # original spiking_orchestrator.py convention was `self._clock +=
+        # 50.0` per call, so agent_brain.spk's refractory_ms=40 was chosen
+        # to clear after exactly one intervening stimulation. Causal time
+        # changes WHO gets to advance a neuron's clock (only itself + real
+        # causal predecessors, never unrelated activity) -- it does NOT
+        # change the network's refractory tuning, so the tick step must
+        # match the convention the network's thresholds were designed
+        # against, or refractory math silently breaks (found while wiring
+        # this in: integer ticks against refractory_ms=40 would almost
+        # never clear, breaking the real Reviewer<->Corrector re-review
+        # loop entirely -- caught before it ever ran, not after).
+        self.tick_size = tick_size
+        self._local_tick: dict = {name: 0.0 for name in rt.neurons}
 
     def _ensure(self, name: str) -> None:
         if name not in self._local_tick:
-            self._local_tick[name] = 0
+            self._local_tick[name] = 0.0
 
-    def stimulate(self, name: str, drive: float):
-        """Advance ONLY `name`'s own local tick (by 1, from its own last
-        value -- not from any global counter), stimulate it at that logical
-        time, then propagate Lamport ticks to anything it causally fires
-        into. Neurons with no causal path to `name` are untouched."""
+    def stimulate(self, name: str, drive: float, caused_by: str = None):
+        """Advance ONLY `name`'s own local tick (by tick_size, from its own
+        last value -- not from any global counter), stimulate it at that
+        logical time, then propagate Lamport ticks to anything it causally
+        fires into. Neurons with no causal path to `name` are untouched.
+
+        `caused_by`: for a causal dependency that ISN'T a synapse -- e.g. a
+        result-driven stimulation injected by orchestrator logic because it
+        depends on another neuron's OUTPUT (Corrector firing because
+        Reviewer's review reported issues; a dynamically-spawned specialist
+        firing because of what its source neuron said) -- pass the
+        predecessor's name so Lamport's max-then-increment rule applies to
+        this real causal edge too. WITHOUT this, two neurons that have
+        never synaptically interacted but DO have a real non-synaptic
+        causal link can end up with independently-drifted local ticks that
+        don't reflect their actual causal order -- found exactly this way:
+        Corrector's own local tick (its first-ever firing) was LOWER than
+        Reviewer's (which had already advanced through several synaptic
+        cascades), so Corrector's fire looked, numerically, like it
+        happened BEFORE Reviewer's most recent one -- and refractory
+        checking against Reviewer's last_spike_time then either blocked
+        the re-review it should have allowed, or (worse) computed a
+        negative elapsed time. caused_by fixes this by syncing the two
+        clocks at the moment of the real dependency, not leaving them to
+        drift independently until it's wrong."""
         self._ensure(name)
-        self._local_tick[name] += 1
-        t = float(self._local_tick[name])
+        if caused_by is not None:
+            self._ensure(caused_by)
+            self._local_tick[name] = max(self._local_tick[name], self._local_tick[caused_by])
+        self._local_tick[name] += self.tick_size
+        t = self._local_tick[name]
         cmd = self.rt.stimulate(name, t, drive)
 
-        # Lamport propagation: any neuron `name` just fired INTO (via a
-        # synapse -- whether or not the cascade already fired it internally,
-        # see runtime.py _fire()'s same-t cascade) gets its local tick
-        # advanced to at least name's firing tick, +1. This is bookkeeping
-        # for FUTURE stimulate() calls on those neurons -- it does not
-        # change what already happened in this call's cascade.
-        if self.rt.neurons[name].fire_count > 0:
-            for syn in self.rt.synapses:
-                if syn.src == name:
-                    self._ensure(syn.dst)
-                    self._local_tick[syn.dst] = max(self._local_tick[syn.dst], int(t)) + 1
+        # Lamport propagation for the WHOLE cascade, not just one synaptic
+        # hop. runtime.py's _fire() can cascade multiple hops deep within a
+        # single stimulate() call (e.g. S_Tests -> TestWriter -> Reviewer),
+        # all sharing the same `t`. A one-hop-only version (checking only
+        # `name`'s own direct synapses) leaves every neuron past the first
+        # hop with a STALE local tick -- found exactly this way, wiring this
+        # into spiking_orchestrator.py: Reviewer's tick stayed stale after a
+        # 2-hop cascade reached it, so a later caused_by="Reviewer" (for
+        # Corrector) synced against the wrong, outdated value. Fixed by
+        # scanning every neuron that actually fired in THIS cascade (its
+        # last_spike_time now equals t) and syncing all of their local
+        # ticks to t, regardless of cascade depth.
+        for other_name, other_state in self.rt.neurons.items():
+            if other_state.last_spike_time == t:
+                self._ensure(other_name)
+                self._local_tick[other_name] = max(self._local_tick[other_name], t)
 
         return cmd
 
@@ -84,10 +126,10 @@ class CausalNet:
         return ref
 
 
-def build_causal(refractory_ms: float = 0) -> tuple:
+def build_causal(refractory_ms: float = 0, tick_size: float = 1.0) -> tuple:
     net = Net(refractory_ms=refractory_ms)
     rt = net.build_live()
-    return CausalNet(net, rt), net, rt
+    return CausalNet(net, rt, tick_size=tick_size), net, rt
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -170,12 +212,60 @@ def _selftest_unrelated_activity_does_not_leak() -> None:
     return ok
 
 
+def _selftest_caused_by_fixes_non_synaptic_causality() -> None:
+    """Reproduces the exact bug found while wiring this into
+    spiking_orchestrator.py: IMPL fires and cascades through several
+    SYNAPTIC hops to REV, advancing REV's local tick well past its own
+    starting point. CORR then fires via a NON-synaptic causal dependency
+    (like Corrector, triggered because of REV's output, not a synapse) --
+    WITHOUT caused_by, CORR's independently-drifted tick can be LOWER than
+    REV's last_spike_time, so CORR's own synapse into REV either gets
+    refractory-blocked when it shouldn't, or worse, computes elapsed < 0.
+    WITH caused_by=REV, CORR's tick is synced to REV's before firing, so
+    the same synapse correctly clears REV's refractory."""
+    REFRACTORY = 40.0
+    TICK = 50.0
+
+    # WITHOUT caused_by -- reproduces the bug
+    cn, net, rt = build_causal(refractory_ms=REFRACTORY, tick_size=TICK)
+    IMPL = cn.neuron("IMPL", threshold=50, leak=0)
+    REV = cn.neuron("REV", threshold=50, leak=0)
+    CORR = cn.neuron("CORR", threshold=50, leak=0)
+    IMPL.to(REV, weight=1.2)
+    CORR.to(REV, weight=1.2)
+    cn.stimulate("IMPL", 60.0)          # REV's tick advances via the IMPL->REV synapse
+    cn.stimulate("REV", 60.0)           # REV fires again directly, advancing REV's tick further
+    before = rt.neurons["REV"].fire_count
+    cn.stimulate("CORR", 60.0)          # NO caused_by -- CORR's tick starts independent, low
+    broken = rt.neurons["REV"].fire_count > before
+
+    # WITH caused_by -- the fix
+    cn2, net2, rt2 = build_causal(refractory_ms=REFRACTORY, tick_size=TICK)
+    IMPL2 = cn2.neuron("IMPL", threshold=50, leak=0)
+    REV2 = cn2.neuron("REV", threshold=50, leak=0)
+    CORR2 = cn2.neuron("CORR", threshold=50, leak=0)
+    IMPL2.to(REV2, weight=1.2)
+    CORR2.to(REV2, weight=1.2)
+    cn2.stimulate("IMPL", 60.0)
+    cn2.stimulate("REV", 60.0)
+    before2 = rt2.neurons["REV"].fire_count
+    cn2.stimulate("CORR", 60.0, caused_by="REV")   # synced against REV's real causal tick
+    fixed = rt2.neurons["REV"].fire_count > before2
+
+    ok = (not broken) and fixed
+    print(f"  [{'PASS' if ok else 'FAIL'}] caused_by fixes non-synaptic causality: "
+          f"without caused_by, REV incorrectly failed to refire (REV refired={broken}, expected False); "
+          f"with caused_by, REV correctly refires (REV refired={fixed}, expected True)")
+    return ok
+
+
 if __name__ == "__main__":
     print("=" * 78)
     print("  PYSPIKE CAUSAL TIME -- self-test")
     print("=" * 78)
     _selftest_causal_propagation()
     ok = _selftest_unrelated_activity_does_not_leak()
+    ok = _selftest_caused_by_fixes_non_synaptic_causality() and ok
     print()
     if ok:
         print("  CONFIRMED: causal (Lamport/proper-time) clocks produce a behaviorally "

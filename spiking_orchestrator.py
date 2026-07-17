@@ -42,6 +42,7 @@ import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pyspike import Net   # noqa: E402
+from pyspike_causal import CausalNet   # noqa: E402
 
 # PORTED TO PYSPIKE (2026-07-17): this used to parse core/examples/agent_brain.spk
 # at every SpikingPipeline() construction. The topology is now built directly
@@ -355,7 +356,6 @@ class SpikingPipeline:
         self.verdicts = verdicts or {}
         self.fired: list[str] = []          # order agents actually ran
         self.outputs: dict[str, str] = {}
-        self._clock = 0.0                    # sim ms; advances per agent so re-fires clear refractory
         self._followups: list[tuple] = []    # result-driven stimulations to apply after the cascade
         self._corrections = 0
         self._review_gates: list[dict] = []  # every real gate_review() call, for calibration logging
@@ -379,6 +379,15 @@ class SpikingPipeline:
         possible after construction."""
         self._net = net = Net(refractory_ms=40)
         rt = net.build_live()
+        # CAUSAL TIME (see pyspike_causal.py): each neuron's timing is
+        # measured against its OWN local tick, advanced only by itself or a
+        # real causal predecessor -- never by unrelated network activity.
+        # tick_size=50.0 matches the OLD self._clock += 50.0 convention
+        # agent_brain.spk's refractory_ms=40 was tuned against (one
+        # intervening stimulation clears refractory); this is a substrate
+        # swap, not a retuning -- see test_pyspike_causal_orchestrator_parity.py
+        # for the verification that behavior is unaffected on this topology.
+        self._causal = CausalNet(net, rt, tick_size=50.0)
 
         # sensory layer (stimulated 0..100 by score_task)
         S_Work      = net.neuron("S_Work",      threshold=50, leak=1)
@@ -439,7 +448,12 @@ class SpikingPipeline:
             # reports issues wakes the Corrector, and only a couple of times.
             if neuron == "Reviewer" and self._review_reports_issues(out) and self._corrections < 2:
                 self._corrections += 1
-                self._followups.append(("Corrector", 60.0))
+                # caused_by="Reviewer": Corrector fires because of Reviewer's
+                # OUTPUT, a real causal dependency that isn't a synapse -- see
+                # CausalNet.stimulate()'s docstring for why this matters
+                # (without it, Corrector's independently-drifted local tick
+                # can silently fail to clear Reviewer's refractory on re-review).
+                self._followups.append(("Corrector", 60.0, "Reviewer"))
         return handler
 
     def _record_specialist_outcomes(self, vault_output: str) -> None:
@@ -531,7 +545,10 @@ class SpikingPipeline:
 
             self._net.action(ref)(self._make_handler(name))
             ref.to(self._specialists["Reviewer"], weight=1.2)
-            self._followups.append((name, 60.0))
+            # caused_by=source_neuron: this specialist exists because of
+            # source_neuron's OUTPUT, a real (non-synaptic) causal dependency --
+            # same reasoning as Corrector's caused_by="Reviewer" above.
+            self._followups.append((name, 60.0, source_neuron))
 
     def _review_reports_issues(self, review_output: str) -> bool:
         if self.dry_run:
@@ -680,23 +697,47 @@ class SpikingPipeline:
             self._followups = []
             self._drive(batch)
 
-        # 5. write the ledger ONCE, at the end, after everything has settled
+        # 5. write the ledger ONCE, at the end, after everything has settled.
+        # caused_by=the last specialist to run: the ledger's causal
+        # predecessor is "whatever the run just finished doing", same
+        # reasoning as Corrector/dynamic-specialist followups above.
         if "Implementer" in self.fired:
-            self._drive([("VaultLogger", 60.0)])
+            self._drive([("VaultLogger", 60.0, self.fired[-1])])
 
         result = {
             "scores": scores,
             "fired": self.fired,
             "agents_run": len(self.fired),
-            "agents_skipped": [n for n in COMMANDS if n not in self.fired],
+            "agents_skipped": [n for n in self._base_specialist_names if n not in self.fired],
         }
         self._log_decision(result)
         return result
 
     def _drive(self, stimulations: list) -> None:
-        for name, drive in stimulations:
-            self._clock += 50.0            # each stimulation a step later in sim time
-            self.rt.stimulate(name, self._clock, float(drive))
+        """Each entry is (name, drive) for an ordinary/sensory stimulation,
+        or (name, drive, caused_by) for a result-driven one that depends on
+        another neuron's OUTPUT rather than a synapse -- see caused_by's
+        docstring in CausalNet.stimulate() for why the distinction matters
+        under causal time.
+
+        Entries in the SAME batch default-chain to the previous entry
+        (unless a caused_by is given explicitly): the orchestrator choosing
+        to stimulate S_Work, then S_Complex, then S_Tests IN THAT ORDER,
+        in one call, is itself a real (if soft) causal intent -- without
+        this, every sensory seed would be an independently-clocked "first
+        event ever" that coincidentally lands on the SAME local tick as
+        every other first event, so their cascades collide when they
+        converge on a shared downstream neuron (found: this silently ate
+        the coincidence-detection second Reviewer fire from S_Complex +
+        TestWriter's accumulated membrane potential, a real regression
+        caught by re-running the demo, not assumed fixed by the caused_by
+        fix for followups alone)."""
+        prev = None
+        for entry in stimulations:
+            name, drive = entry[0], entry[1]
+            caused_by = entry[2] if len(entry) > 2 else prev
+            self._causal.stimulate(name, float(drive), caused_by=caused_by)
+            prev = name
 
     def _log_decision(self, result: dict) -> None:
         """Append this routing decision as one JSON line. Logged for BOTH
