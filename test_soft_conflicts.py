@@ -36,14 +36,23 @@ anyway (a proxy for "how much realized collision risk did we accept").
     python test_soft_conflicts.py
 """
 
+import hashlib
 import os
 import random
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "core"))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from compiler.compiler import SpikelingParser      # noqa: E402
-from runtime.runtime import SpikelingRuntime         # noqa: E402
+from pyspike import Net                              # noqa: E402
+
+# PORTED TO PYSPIKE (2026-07-17): schedulers C and D used to build the network
+# by f-string-formatting .spk text (weights rounded to 4 decimals via
+# f"{w:.4f}") and re-parsing it every wave. Now built directly via pyspike.Net
+# -- full-precision floats, no text round-trip. Verified byte-identical wave
+# assignments + realized-risk totals to the old text-based version across 500
+# random graphs (see test_pyspike_soft_conflicts_parity.py) before this
+# replaced it -- the .4f rounding turned out not to change any outcome at this
+# scale, so full precision is a strict improvement, not just a style change.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -64,11 +73,26 @@ def pair_severity(a, b) -> float:
     """0 if disjoint files. Otherwise a random-but-deterministic severity
     standing in for 'how much of the shared file do they actually both
     touch' -- seeded off the pair's names so it's reproducible across the
-    three schedulers being compared on the same graph."""
+    three schedulers being compared on the same graph.
+
+    BUG FOUND AND FIXED (2026-07-17, while building the pyspike parity test):
+    this used to seed with Python's built-in hash((name_a, name_b)) -- but
+    str hashing is RANDOMIZED per-process by default (PEP 456), so the exact
+    same seed=7 run produced DIFFERENT severities, and therefore different
+    benchmark numbers, on every separate process launch. Confirmed directly:
+    hash(('agent_0','agent_1')) differed across two `python -c` calls in the
+    same terminal session. The within-a-single-run comparisons across
+    schedulers A/B/C/D were never affected (they all read the same sev dict
+    computed once per run), but the ACROSS-RUN "seed=7" reproducibility this
+    docstring promised was never actually true. Fixed with hashlib.md5 on the
+    UTF-8-encoded names, which is stable across processes (and Python
+    versions) by design, unlike the builtin hash()."""
     shared = a["files"] & b["files"]
     if not shared:
         return 0.0
-    rng = random.Random(hash((a["name"], b["name"])) & 0xFFFFFFFF)
+    key = f"{a['name']}|{b['name']}".encode("utf-8")
+    seed = int(hashlib.md5(key).hexdigest(), 16) & 0xFFFFFFFF
+    rng = random.Random(seed)
     return rng.uniform(0.05, 1.0)   # even a "shares a file" pair usually isn't a full collision
 
 
@@ -155,13 +179,14 @@ def _drive_for(priority: float) -> float:
     return DRIVE_FLOOR + priority * DRIVE_PRIORITY_SCALE
 
 
-def _network_text_weighted(agents, sev):
-    lines = [f"neuron {a['name']} threshold={int(THRESH_NEURON)} leak={int(LEAK)} type=LIF" for a in agents]
+def _build_network_weighted(agents, sev):
+    net = Net()
+    refs = {a["name"]: net.neuron(a["name"], threshold=int(THRESH_NEURON), leak=int(LEAK)) for a in agents}
     for (x, y), s in sev.items():
         w = BASE_INHIBIT * s
-        lines.append(f"connect {x} -> {y} weight={w:.4f}")
-        lines.append(f"connect {y} -> {x} weight={w:.4f}")
-    return "\n".join(lines)
+        refs[x].inhibits(refs[y], weight=w)
+        refs[y].inhibits(refs[x], weight=w)
+    return net.build()
 
 
 def schedule_weighted_inhibition(agents, sev):
@@ -171,7 +196,7 @@ def schedule_weighted_inhibition(agents, sev):
     while pending:
         names = {a["name"] for a in pending}
         sev_pending = {k: v for k, v in sev.items() if k[0] in names and k[1] in names}
-        rt = SpikelingRuntime(SpikelingParser().parse(_network_text_weighted(pending, sev_pending)))
+        rt = _build_network_weighted(pending, sev_pending)
         wave = []
         for a in sorted(pending, key=lambda x: -x["priority"]):
             before = rt.neurons[a["name"]].fire_count
@@ -246,20 +271,21 @@ def schedule_ternary_gated(agents, sev):
         ambiguous_pairs = {k: v for k, v in sev_pending.items() if _classify_trit(v) == 0}
         # trit=+1 pairs get no synapse at all -- literally absent from the network
 
-        lines = [f"neuron {a['name']} threshold={int(THRESH_NEURON)} leak={int(LEAK)} type=LIF"
-                 for a in pending]
+        net = Net()
+        refs = {a["name"]: net.neuron(a["name"], threshold=int(THRESH_NEURON), leak=int(LEAK))
+                for a in pending}
         # hard (-1) pairs: full-strength inhibition, no priority can overcome it
         for (x, y) in hard_pairs:
-            lines.append(f"connect {x} -> {y} weight=-6.0000")
-            lines.append(f"connect {y} -> {x} weight=-6.0000")
+            refs[x].inhibits(refs[y], weight=-6.0)
+            refs[y].inhibits(refs[x], weight=-6.0)
         # ambiguous (0) pairs: severity-scaled inhibition, exactly like scheduler C,
         # but ONLY here -- the certain bands never touch the continuous machinery
         for (x, y), s in ambiguous_pairs.items():
             w = BASE_INHIBIT * s
-            lines.append(f"connect {x} -> {y} weight={w:.4f}")
-            lines.append(f"connect {y} -> {x} weight={w:.4f}")
+            refs[x].inhibits(refs[y], weight=w)
+            refs[y].inhibits(refs[x], weight=w)
 
-        rt = SpikelingRuntime(SpikelingParser().parse("\n".join(lines)))
+        rt = net.build()
         wave = []
         for a in sorted(pending, key=lambda x: -x["priority"]):
             before = rt.neurons[a["name"]].fire_count
